@@ -80,7 +80,7 @@ pub fn update_jump_list(recent: &mut Vec<String>, path: &String) -> Result<()> {
 }
 
 // safety: no invariants, it's all FFI
-unsafe fn create_directory_link(path: HSTRING, args: HSTRING, title: BSTR) -> Result<IShellLinkW> {
+unsafe fn create_directory_link(path: HSTRING, args: HSTRING, title: BSTR) -> Result<IShellLinkW> { unsafe {
     let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
     link.SetPath(&path)?; // launch ourselves...
     link.SetIconLocation(w!("%SystemRoot%\\System32\\shell32.dll"), 3)?; // ...with the icon for a directory...
@@ -97,4 +97,4 @@ unsafe fn create_directory_link(path: HSTRING, args: HSTRING, title: BSTR) -> Re
     store.Commit()?;
 
     Ok(link)
-}
+}}
