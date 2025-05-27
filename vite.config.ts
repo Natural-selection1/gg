@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
@@ -21,5 +22,12 @@ export default defineConfig(async () => ({
 
   build: {
     target: ["es2022", "chrome97", "edge97", "safari15"]
+  },
+
+  // 测试配置
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    include: ['src/**/*.{test,spec}.{js,ts}']
   }
 }));
