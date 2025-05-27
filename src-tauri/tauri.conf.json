@@ -4,7 +4,7 @@
   "identifier": "au.gulbanana.gg",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:6973",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -35,10 +35,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "signCommand": "trusted-signing-cli -e https://wus2.codesigning.azure.net/ -a agile-signing -c cloud-apps %1"
-    }
+    ]
   },
   "plugins": {}
 }
