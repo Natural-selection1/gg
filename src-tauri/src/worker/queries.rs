@@ -69,6 +69,7 @@ impl QueryState {
 pub struct QuerySession<'q, 'w: 'q> {
     pub ws: &'q WorkspaceSession<'w>,
     pub state: QueryState,
+    #[allow(clippy::type_complexity)]
     iter: Peekable<
         Skip<
             TopoGroupedGraphIterator<
@@ -84,6 +85,7 @@ pub struct QuerySession<'q, 'w: 'q> {
             >,
         >,
     >,
+    #[allow(clippy::type_complexity)]
     is_immutable: Box<dyn Fn(&CommitId) -> Result<bool, RevsetEvaluationError> + 'q>,
 }
 
@@ -241,7 +243,8 @@ impl<'q, 'w> QuerySession<'q, 'w> {
             // terminate any temporary stems created for missing edges
             if let Some(slot) = next_missing
                 .take()
-                .and_then(|id| self.find_stem_for_commit(&id)) {
+                .and_then(|id| self.find_stem_for_commit(&id))
+            {
                 if let Some(terminated_stem) = &self.state.stems[slot] {
                     rows.last_mut().unwrap().lines.push(LogLine::ToMissing {
                         indirect: terminated_stem.indirect,

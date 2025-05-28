@@ -160,6 +160,7 @@ impl StoreRef {
     derive(TS),
     ts(export, export_to = "../src/messages/")
 )]
+#[allow(clippy::large_enum_variant)]
 pub enum Operand {
     Repository,
     Revision {
