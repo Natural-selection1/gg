@@ -2,7 +2,7 @@
     import type { RevId } from "./messages/RevId";
     import type { RevResult } from "./messages/RevResult";
     import type { RepoConfig } from "./messages/RepoConfig";
-    import { type Query, query, trigger, onEvent } from "./ipc.js";
+    import { type Query, query, trigger, onEvent, writeFontSize } from "./ipc.js";
     import {
         currentMutation,
         currentContext,
@@ -23,6 +23,7 @@
     import ModalOverlay from "./shell/ModalOverlay.svelte";
     import ErrorDialog from "./shell/ErrorDialog.svelte";
     import RecentWorkspaces from "./shell/RecentWorkspaces.svelte";
+    import OptionsDialog from "./shell/OptionsDialog.svelte";
     import { onMount, setContext } from "svelte";
     import IdSpan from "./controls/IdSpan.svelte";
     import InputDialog from "./shell/InputDialog.svelte";
@@ -91,6 +92,8 @@
         $revisionSelectEvent = undefined;
         if (config.type == "Workspace") {
             settings.markUnpushedBranches = config.mark_unpushed_branches;
+            settings.fontSize = config.font_size;
+            applyFontSize(settings.fontSize);
             $repoStatusEvent = config.status;
         }
     }
@@ -98,11 +101,7 @@
     async function loadChange(id: RevId) {
         let rev = await query<RevResult>("query_revision", { id }, (q) => (selection = q));
 
-        if (
-            rev.type == "data" &&
-            rev.value.type == "NotFound" &&
-            id.commit.hex != $repoStatusEvent?.working_copy.hex
-        ) {
+        if (rev.type == "data" && rev.value.type == "NotFound" && id.commit.hex != $repoStatusEvent?.working_copy.hex) {
             return loadChange({
                 change: { type: "ChangeId", hex: "@", prefix: "@", rest: "" },
                 commit: $repoStatusEvent!.working_copy,
@@ -153,12 +152,40 @@
             showOptionsDialog = true;
         }
     }
+
+    async function handleSaveOptions(event: CustomEvent<Settings>) {
+        await saveSettings(event.detail);
+        showOptionsDialog = false;
+    }
+
+    function handleCancelOptions() {
+        showOptionsDialog = false;
+    }
+
+    // save settings to jj config
+    async function saveSettings(newSettings: Settings) {
+        try {
+            // save font size to jj config
+            const success = await writeFontSize(newSettings.fontSize);
+            if (success) {
+                settings = newSettings;
+                applyFontSize(settings.fontSize);
+            } else {
+                console.error("Failed to save font size to jj config");
+            }
+        } catch (error) {
+            console.error("Failed to save settings to jj config:", error);
+        }
+    }
+
+    // apply font size to page
+    function applyFontSize(fontSize: number) {
+        document.documentElement.style.setProperty("--app-font-size", `${fontSize}px`);
+    }
 </script>
 
 <Zone operand={{ type: "Repository" }} alwaysTarget let:target>
-    <div
-        id="shell"
-        class={$repoConfigEvent?.type == "Workspace" ? $repoConfigEvent.theme_override : ""}>
+    <div id="shell" class={$repoConfigEvent?.type == "Workspace" ? $repoConfigEvent.theme_override : ""}>
         {#if $repoConfigEvent.type == "Initial"}
             <Pane>
                 <h2 slot="header">Loading...</h2>
@@ -169,9 +196,7 @@
             <Pane />
         {:else if $repoConfigEvent.type == "Workspace"}
             {#key $repoConfigEvent.absolute_path}
-                <LogPane
-                    default_query={$repoConfigEvent.default_query}
-                    latest_query={$repoConfigEvent.latest_query} />
+                <LogPane default_query={$repoConfigEvent.default_query} latest_query={$repoConfigEvent.latest_query} />
             {/key}
 
             <div class="separator" />
@@ -183,8 +208,7 @@
                     <Pane>
                         <h2 slot="header">Not Found</h2>
                         <p slot="body">
-                            Revision <IdSpan id={data.id.change} />|<IdSpan id={data.id.commit} /> does
-                            not exist.
+                            Revision <IdSpan id={data.id.change} />|<IdSpan id={data.id.commit} /> does not exist.
                         </p>
                     </Pane>
                 {/if}
@@ -226,7 +250,11 @@
 
         <StatusBar {target} />
 
-        {#if $currentInput}
+        {#if showOptionsDialog}
+            <ModalOverlay>
+                <OptionsDialog {settings} on:save={handleSaveOptions} on:cancel={handleCancelOptions} />
+            </ModalOverlay>
+        {:else if $currentInput}
             <ModalOverlay>
                 <InputDialog
                     title={$currentInput.title}
@@ -237,10 +265,7 @@
         {:else if $currentMutation}
             <ModalOverlay>
                 {#if $currentMutation.type == "data" && ($currentMutation.value.type == "InternalError" || $currentMutation.value.type == "PreconditionError")}
-                    <ErrorDialog
-                        title="Command Error"
-                        onClose={() => ($currentMutation = null)}
-                        severe>
+                    <ErrorDialog title="Command Error" onClose={() => ($currentMutation = null)} severe>
                         {#if $currentMutation.value.type == "InternalError"}
                             <p>
                                 {#each $currentMutation.value.message.lines as line}
