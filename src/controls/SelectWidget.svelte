@@ -32,10 +32,9 @@
     select {
         appearance: none;
         padding-left: 3px;
-
-        &:focus-visible {
-            padding-left: 2px;
-        }
+    }
+    select:focus-visible {
+        padding-left: 2px;
     }
 
     .wrapper {
