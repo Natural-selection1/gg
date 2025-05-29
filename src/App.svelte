@@ -36,6 +36,9 @@
     // for open recent workspaces when error dialogs happen
     let recentWorkspaces: string[] = [];
 
+    // show options dialog
+    let showOptionsDialog = false;
+
     document.addEventListener("keydown", (event) => {
         if (event.key === "o" && event.ctrlKey) {
             event.preventDefault();
@@ -67,6 +70,7 @@
     onEvent("gg://context/tree", mutateTree);
     onEvent("gg://context/branch", mutateRef);
     onEvent("gg://input", requestInput);
+    onEvent("gg://menu/options", handleMenuOptions);
 
     $: if ($repoConfigEvent) loadRepo($repoConfigEvent);
     $: if ($repoStatusEvent && $revisionSelectEvent) loadChange($revisionSelectEvent.id);
@@ -141,6 +145,13 @@
                 trigger("notify_input", { response });
             },
         });
+    }
+
+    // handle options dialog
+    function handleMenuOptions(event: string) {
+        if (event === "options") {
+            showOptionsDialog = true;
+        }
     }
 </script>
 
