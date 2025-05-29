@@ -1,5 +1,6 @@
 @import "modern-normalize";
 @import "@catppuccin/palette/css/catppuccin.css";
+@import "tailwindcss";
 
 :root {
   overscroll-behavior: none;
