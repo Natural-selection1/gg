@@ -59,6 +59,7 @@
 
     let settings: Settings = {
         markUnpushedBranches: true,
+        fontSize: 16,
     };
     setContext<Settings>("settings", settings);
 
