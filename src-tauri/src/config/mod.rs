@@ -74,7 +74,7 @@ pub fn read_config(repo_path: Option<&Path>) -> Result<(UserSettings, RevsetAlia
         ConfigLayer::parse(ConfigSource::Default, include_str!("../config/gg.toml"))?;
     layers.extend(jj_default_layers);
     layers.push(gg_default_layer);
-    
+
     let mut raw_config = config_from_environment(layers);
     config_env.reload_user_config(&mut raw_config)?;
     if let Some(repo_path) = repo_path {
