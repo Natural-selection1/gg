@@ -102,14 +102,17 @@
 
             <div class="preview-area">
                 <h3>Preview:</h3>
-                <div class="preview-text" style={previewStyle}>This is a preview of the font size.</div>
+                <div class="preview-text" style={previewStyle}>
+                    This is a preview of the font size.
+                </div>
             </div>
         </div>
     </div>
 
     <div slot="commands">
         <button type="button" on:click={handleCancel}>Cancel</button>
-        <button type="button" on:click={handleSave} class="primary" disabled={!!fontSizeError}>Save</button>
+        <button type="button" on:click={handleSave} class="primary" disabled={!!fontSizeError}
+            >Save</button>
     </div>
 </ModalDialog>
 
