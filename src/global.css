@@ -11,8 +11,11 @@
     -webkit-text-size-adjust: 100%;
 
     /* system fonts */
-    --stack-code: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-    --stack-industrial: Bahnschrift, "DIN Alternate", "Franklin Gothic Medium", "Roboto", "Nimbus Sans",
+    --stack-code:
+        ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono",
+        monospace;
+    --stack-industrial:
+        Bahnschrift, "DIN Alternate", "Franklin Gothic Medium", "Roboto", "Nimbus Sans",
         sans-serif-condensed, sans-serif;
 }
 
