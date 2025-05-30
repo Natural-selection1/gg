@@ -612,6 +612,7 @@ fn handle_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
+#[cfg(windows)]
 fn with_recent_workspaces(
     window: Window,
     f: impl FnOnce(&mut Vec<String>) -> Result<()>,
