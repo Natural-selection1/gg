@@ -55,10 +55,12 @@ pub enum SessionEvent {
         tx: Sender<messages::MutationResult>,
         mutation: Box<dyn Mutation + Send + Sync>,
     },
+    #[cfg(windows)]
     ReadConfigArray {
         tx: Sender<Result<Vec<String>>>,
         key: Vec<String>,
     },
+    #[cfg(windows)]
     WriteConfigArray {
         scope: ConfigSource,
         key: Vec<String>,
@@ -244,9 +246,9 @@ impl Session for WorkspaceSession<'_> {
                         }
                     }
                 }
+                #[cfg(windows)]
                 SessionEvent::ReadConfigArray { key, tx } => {
                     let name: ConfigNamePathBuf = key.iter().collect();
-
                     tx.send(
                         self.data
                             .settings
@@ -265,6 +267,7 @@ impl Session for WorkspaceSession<'_> {
                             .context("read config"),
                     )?;
                 }
+                #[cfg(windows)]
                 SessionEvent::WriteConfigArray { scope, key, values } => {
                     let name: ConfigNamePathBuf = key.iter().collect();
                     let config_env = ConfigEnv::from_environment()?;
