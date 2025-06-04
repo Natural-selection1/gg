@@ -1,12 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod callbacks;
-mod config;
-mod handler;
-mod menu;
-mod messages;
-mod worker;
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,6 +15,13 @@ use tauri::{Emitter, Listener, State, Window, WindowEvent, Wry};
 use tauri::{Manager, ipc::InvokeError};
 use tauri_plugin_window_state::StateFlags;
 
+mod callbacks;
+mod config;
+mod handler;
+mod menu;
+mod messages;
+mod worker;
+use callbacks::FrontendCallbacks;
 use messages::{
     AbandonRevisions, BackoutRevisions, CheckoutRevision, CopyChanges, CreateRef, CreateRevision,
     DeleteRef, DescribeRevision, DuplicateRevisions, GitFetch, GitPush, InputResponse,
@@ -29,8 +29,6 @@ use messages::{
     RevId, TrackBranch, UndoOperation, UntrackBranch,
 };
 use worker::{Mutation, Session, SessionEvent, WorkerSession};
-
-use crate::callbacks::FrontendCallbacks;
 
 #[derive(Parser, Debug)]
 #[command(version, author)]
@@ -88,7 +86,11 @@ impl AppState {
 }
 
 fn main() -> Result<()> {
-    // before parsing args, attach a console on windows - will fail if not started from a shell, but that's fine
+    // before parsing args, attach a console on Windows
+    // will fail if not started from a shell, but that's fine
+    // why need this?
+    // because the worker thread is not attached to the console on Windows,
+    // so we need to attach it manually
     #[cfg(windows)]
     {
         use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
@@ -561,7 +563,7 @@ fn try_open_repository(window: &Window, cwd: Option<PathBuf>) -> Result<()> {
                 "gg://repo/config",
                 messages::RepoConfig::LoadError {
                     absolute_path: cwd.unwrap_or_default().into(),
-                    message: format!("{:#?}", err),
+                    message: format!("{err:#?}"),
                 },
             )?;
         }
