@@ -795,7 +795,7 @@ impl WorkspaceSession<'_> {
 
         tx.repo_mut().rebase_descendants()?;
 
-        self.finish_transaction(tx, format!("import git refs: {:?}", stats))?;
+        self.finish_transaction(tx, format!("import git refs: {stats:?}"))?;
         Ok(())
     }
 
@@ -900,13 +900,13 @@ impl WorkspaceData {
 
 impl SessionOperation {
     pub fn new(
-        id: &WorkspaceName,
+        name: &WorkspaceName,
         data: &WorkspaceData,
         repo: Arc<ReadonlyRepo>,
     ) -> SessionOperation {
         let wc_id = repo
             .view()
-            .get_wc_commit_id(id)
+            .get_wc_commit_id(name)
             .expect("No working copy found for workspace")
             .clone();
 
@@ -918,7 +918,7 @@ impl SessionOperation {
         // guarantee that an index can be populated - we will unwrap later
         let prefix_context =
             IdPrefixContext::default().disambiguate_within(if !revset_string.is_empty() {
-                parse_revset(&data.parse_context(id), &revset_string)
+                parse_revset(&data.parse_context(name), &revset_string)
                     .expect("init prefix context: parse revsets.short-prefixes")
             } else {
                 RevsetExpression::all()
