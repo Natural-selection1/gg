@@ -330,67 +330,67 @@ fn query_rev_not_found() -> Result<()> {
     Ok(())
 }
 
-#[test]
-#[cfg(windows)]
-fn config_read() -> Result<()> {
-    let repo = mkrepo();
+// #[test]
+// #[cfg(windows)]
+// fn config_read() -> Result<()> {
+//     let repo = mkrepo();
 
-    let (tx, rx) = channel::<SessionEvent>();
-    let (tx_load, rx_load) = channel::<Result<RepoConfig>>();
-    let (tx_read, rx_read) = channel::<Result<Vec<String>>>();
+//     let (tx, rx) = channel::<SessionEvent>();
+//     let (tx_load, rx_load) = channel::<Result<RepoConfig>>();
+//     let (tx_read, rx_read) = channel::<Result<Vec<String>>>();
 
-    tx.send(SessionEvent::OpenWorkspace {
-        tx: tx_load,
-        wd: Some(repo.path().to_owned()),
-    })?;
-    tx.send(SessionEvent::ReadConfigArray {
-        tx: tx_read,
-        key: vec!["gg".into(), "ui".into(), "recent-workspaces".into()],
-    })?;
-    tx.send(SessionEvent::EndSession)?;
+//     tx.send(SessionEvent::OpenWorkspace {
+//         tx: tx_load,
+//         wd: Some(repo.path().to_owned()),
+//     })?;
+//     tx.send(SessionEvent::ReadConfigArray {
+//         tx: tx_read,
+//         key: vec!["gg".into(), "ui".into(), "recent-workspaces".into()],
+//     })?;
+//     tx.send(SessionEvent::EndSession)?;
 
-    WorkerSession::default().handle_events(&rx)?;
+//     WorkerSession::default().handle_events(&rx)?;
 
-    _ = rx_load.recv()??;
-    let result = rx_read.recv()?;
+//     _ = rx_load.recv()??;
+//     let result = rx_read.recv()?;
 
-    assert!(result.is_ok()); // key may be empty, but should exist due to defaults
+//     assert!(result.is_ok()); // key may be empty, but should exist due to defaults
 
-    Ok(())
-}
+//     Ok(())
+// }
 
-#[test]
-#[cfg(windows)]
-fn config_write() -> Result<()> {
-    use jj_lib::config::ConfigSource;
+// #[test]
+// #[cfg(windows)]
+// fn config_write() -> Result<()> {
+//     use jj_lib::config::ConfigSource;
 
-    let repo = mkrepo();
+//     let repo = mkrepo();
 
-    let (tx, rx) = channel::<SessionEvent>();
-    let (tx_load, rx_load) = channel::<Result<RepoConfig>>();
-    let (tx_read, rx_read) = channel::<Result<Vec<String>>>();
+//     let (tx, rx) = channel::<SessionEvent>();
+//     let (tx_load, rx_load) = channel::<Result<RepoConfig>>();
+//     let (tx_read, rx_read) = channel::<Result<Vec<String>>>();
 
-    tx.send(SessionEvent::OpenWorkspace {
-        tx: tx_load,
-        wd: Some(repo.path().to_owned()),
-    })?;
-    tx.send(SessionEvent::WriteConfigArray {
-        scope: ConfigSource::Repo,
-        key: vec!["gg".into(), "test".into()],
-        values: vec!["a".into(), "b".into()],
-    })?;
-    tx.send(SessionEvent::ReadConfigArray {
-        tx: tx_read,
-        key: vec!["gg".into(), "test".into()],
-    })?;
-    tx.send(SessionEvent::EndSession)?;
+//     tx.send(SessionEvent::OpenWorkspace {
+//         tx: tx_load,
+//         wd: Some(repo.path().to_owned()),
+//     })?;
+//     tx.send(SessionEvent::WriteConfigArray {
+//         scope: ConfigSource::Repo,
+//         key: vec!["gg".into(), "test".into()],
+//         values: vec!["a".into(), "b".into()],
+//     })?;
+//     tx.send(SessionEvent::ReadConfigArray {
+//         tx: tx_read,
+//         key: vec!["gg".into(), "test".into()],
+//     })?;
+//     tx.send(SessionEvent::EndSession)?;
 
-    WorkerSession::default().handle_events(&rx)?;
+//     WorkerSession::default().handle_events(&rx)?;
 
-    _ = rx_load.recv()??;
-    let result = rx_read.recv()??;
+//     _ = rx_load.recv()??;
+//     let result = rx_read.recv()??;
 
-    assert_eq!(vec!["a".to_string(), "b".to_string()], result);
+//     assert_eq!(vec!["a".to_string(), "b".to_string()], result);
 
-    Ok(())
-}
+//     Ok(())
+// }

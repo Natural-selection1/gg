@@ -1,12 +1,12 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
-    str::FromStr as _,
+    // str::FromStr as _,
     sync::mpsc::{Receiver, Sender},
 };
 
 use anyhow::{Context, Result, anyhow};
-use jj_cli::{config::ConfigEnv, ui::Ui};
+// use jj_cli::{config::ConfigEnv, ui::Ui};
 use jj_lib::config::{ConfigNamePathBuf, ConfigSource};
 
 use super::{
@@ -16,7 +16,8 @@ use super::{
 };
 use crate::{
     config::{GGSettings, read_config},
-    handler, messages,
+    // handler,
+    messages,
 };
 
 /// implemented by states of the event loop
@@ -61,12 +62,12 @@ pub enum SessionEvent {
         tx: Sender<Result<Vec<String>>>,
         key: Vec<String>,
     },
-    #[cfg(windows)]
-    WriteConfigArray {
-        scope: ConfigSource,
-        key: Vec<String>,
-        values: Vec<String>,
-    },
+    // #[cfg(windows)]
+    // WriteConfigArray {
+    //     scope: ConfigSource,
+    //     key: Vec<String>,
+    //     values: Vec<String>,
+    // },
     WriteConfigValue {
         scope: ConfigSource,
         key: Vec<String>,
@@ -268,35 +269,35 @@ impl Session for WorkspaceSession<'_> {
                             .context("read config"),
                     )?;
                 }
-                #[cfg(windows)]
-                SessionEvent::WriteConfigArray { scope, key, values } => {
-                    let name: ConfigNamePathBuf = key.iter().collect();
-                    let config_env = ConfigEnv::from_environment(&Ui::null());
-                    let path = match scope {
-                        ConfigSource::User => config_env
-                            .user_config_paths()
-                            // TODO: If there are multiple config paths, is there
-                            // a more intelligent way to pick one?
-                            .next()
-                            .ok_or_else(|| anyhow!("No user config path found to edit"))
-                            .map(|p| p.to_path_buf()),
-                        ConfigSource::Repo => Ok(self.workspace.repo_path().join("config.toml")),
-                        _ => Err(anyhow!("Can't get path for config source {scope:?}")),
-                    }
-                    .and_then(|path| {
-                        let toml_array: toml_edit::Value =
-                            toml_edit::Value::Array(values.iter().collect());
-                        let mut file = jj_lib::config::ConfigFile::load_or_empty(scope, &path)?;
-                        file.set_value(&name, toml_array)?;
-                        file.save()?;
-                        Ok(())
-                    });
+                // #[cfg(windows)]
+                // SessionEvent::WriteConfigArray { scope, key, values } => {
+                //     let name: ConfigNamePathBuf = key.iter().collect();
+                //     let config_env = ConfigEnv::from_environment(&Ui::null());
+                //     let path = match scope {
+                //         ConfigSource::User => config_env
+                //             .user_config_paths()
+                //             // TODO: If there are multiple config paths, is there
+                //             // a more intelligent way to pick one?
+                //             .next()
+                //             .ok_or_else(|| anyhow!("No user config path found to edit"))
+                //             .map(|p| p.to_path_buf()),
+                //         ConfigSource::Repo => Ok(self.workspace.repo_path().join("config.toml")),
+                //         _ => Err(anyhow!("Can't get path for config source {scope:?}")),
+                //     }
+                //     .and_then(|path| {
+                //         let toml_array: toml_edit::Value =
+                //             toml_edit::Value::Array(values.iter().collect());
+                //         let mut file = jj_lib::config::ConfigFile::load_or_empty(scope, &path)?;
+                //         file.set_value(&name, toml_array)?;
+                //         file.save()?;
+                //         Ok(())
+                //     });
 
-                    handler::optional!(path);
+                //     handler::optional!(path);
 
-                    (self.data.settings, self.data.aliases_map) =
-                        read_config(self.workspace.repo_path())?;
-                }
+                //     (self.data.settings, self.data.aliases_map) =
+                //         read_config(self.workspace.repo_path())?;
+                // }
                 SessionEvent::WriteConfigValue { scope, key, value } => {
                     let config_key: ConfigNamePathBuf = key.iter().collect();
                     let scope = match scope {
