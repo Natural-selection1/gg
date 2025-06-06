@@ -8,6 +8,7 @@
     const dispatch = createEventDispatcher<{
         save: Settings;
         cancel: void;
+        writeCustomConfig: [string, string];
     }>();
 
     // create a local copy of the settings for editing
@@ -19,6 +20,11 @@
     // font size input validation
     let fontSizeInput = localSettings.fontSize.toString();
     let fontSizeError = "";
+
+    // custom config input fields
+    let customConfigKey = "";
+    let customConfigValue = "";
+    let customConfigError = "";
 
     // validate font size input
     function validateFontSize(value: string): boolean {
@@ -36,6 +42,20 @@
             return false;
         }
         fontSizeError = "";
+        return true;
+    }
+
+    // validate custom config input
+    function validateCustomConfig(key: string, value: string): boolean {
+        if (key.trim() === "") {
+            customConfigError = "key cannot be empty";
+            return false;
+        }
+        if (value.trim() === "") {
+            customConfigError = "value cannot be empty";
+            return false;
+        }
+        customConfigError = "";
         return true;
     }
 
@@ -58,10 +78,30 @@
         }
     }
 
+    // handle custom config write
+    function handleWriteCustomConfig() {
+        if (validateCustomConfig(customConfigKey, customConfigValue)) {
+            dispatch("writeCustomConfig", [customConfigKey.trim(), customConfigValue.trim()]);
+            // clear the input fields after writing
+            customConfigKey = "";
+            customConfigValue = "";
+            customConfigError = "";
+        }
+    }
+
     function handleSave() {
-        // validate one more time before saving
         if (validateFontSize(fontSizeInput)) {
             localSettings.fontSize = parseInt(fontSizeInput);
+
+            if (customConfigKey.trim() && customConfigValue.trim()) {
+                if (validateCustomConfig(customConfigKey, customConfigValue)) {
+                    dispatch("writeCustomConfig", [
+                        customConfigKey.trim(),
+                        customConfigValue.trim(),
+                    ]);
+                }
+            }
+
             dispatch("save", localSettings);
         }
     }
@@ -76,7 +116,9 @@
 
 <ModalDialog title="Options" on:cancel={handleCancel} on:default={handleSave}>
     <div class="options-content">
+        <!-- font size setting -->
         <div class="option-group">
+            <h3>Display Settings</h3>
             <div class="option-item">
                 <label for="fontSize">Font Size (px):</label>
                 <div class="input-container">
@@ -107,6 +149,54 @@
                 </div>
             </div>
         </div>
+
+        <!-- custom config setting -->
+        <div class="option-group">
+            <h3>Custom Config</h3>
+            <div class="custom-config-section">
+                <div class="option-item">
+                    <label for="customConfigKey">Key:</label>
+                    <div class="input-container">
+                        <input
+                            id="customConfigKey"
+                            type="text"
+                            placeholder="e.g. user.name"
+                            bind:value={customConfigKey}
+                            class:error={customConfigError} />
+                    </div>
+                </div>
+
+                <div class="option-item">
+                    <label for="customConfigValue">Value:</label>
+                    <div class="input-container">
+                        <input
+                            id="customConfigValue"
+                            type="text"
+                            placeholder="e.g. John Doe"
+                            bind:value={customConfigValue}
+                            class:error={customConfigError} />
+                        {#if customConfigError}
+                            <div class="error-message">{customConfigError}</div>
+                        {/if}
+                    </div>
+                </div>
+
+                <div class="custom-config-actions">
+                    <button
+                        type="button"
+                        class="write-config-btn"
+                        on:click={handleWriteCustomConfig}
+                        disabled={!customConfigKey.trim() || !customConfigValue.trim()}>
+                        Write Config
+                    </button>
+                </div>
+
+                <div class="config-hints">
+                    <span class="hint"
+                        >These configs will be written directly to jj config file</span>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div slot="commands">
@@ -119,8 +209,8 @@
 <style>
     .options-content {
         padding: 16px;
-        min-width: 400px;
-        max-width: 500px;
+        min-width: 450px;
+        max-width: 550px;
     }
 
     .option-group {
@@ -132,6 +222,8 @@
         color: var(--ctp-text);
         font-size: 16px;
         font-weight: 600;
+        border-bottom: 1px solid var(--ctp-overlay0);
+        padding-bottom: 6px;
     }
 
     .option-item {
@@ -154,8 +246,8 @@
         gap: 4px;
     }
 
-    input[type="number"] {
-        width: 100px;
+    input[type="number"],
+    input[type="text"] {
         padding: 6px 8px;
         border-radius: 4px;
         background: var(--ctp-base);
@@ -164,17 +256,25 @@
         font-size: 14px;
     }
 
-    input[type="number"]:focus {
+    input[type="number"] {
+        width: 100px;
+    }
+
+    input[type="text"] {
+        width: 100%;
+    }
+
+    input:focus {
         outline: none;
         border-color: var(--ctp-blue);
         box-shadow: 0 0 0 2px var(--ctp-blue, rgba(137, 180, 250, 0.3));
     }
 
-    input[type="number"].error {
+    input.error {
         border-color: var(--ctp-red);
     }
 
-    input[type="number"].error:focus {
+    input.error:focus {
         border-color: var(--ctp-red);
         box-shadow: 0 0 0 2px rgba(243, 139, 168, 0.3);
     }
@@ -185,7 +285,8 @@
         margin-top: 2px;
     }
 
-    .size-hints {
+    .size-hints,
+    .config-hints {
         display: flex;
         flex-direction: column;
         gap: 4px;
@@ -213,6 +314,44 @@
         background: var(--ctp-base);
         border-radius: 4px;
         border: 1px solid var(--ctp-overlay0);
+    }
+
+    .custom-config-section {
+        background: var(--ctp-surface0);
+        padding: 16px;
+        border-radius: 6px;
+        border: 1px solid var(--ctp-overlay0);
+    }
+
+    .custom-config-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin: 16px 0 12px 0;
+        padding-left: 132px;
+    }
+
+    .write-config-btn {
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: 1px solid var(--ctp-green);
+        background: var(--ctp-green);
+        color: var(--ctp-crust);
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-size: 13px;
+    }
+
+    .write-config-btn:hover:not(:disabled) {
+        background: var(--ctp-teal);
+        border-color: var(--ctp-teal);
+    }
+
+    .write-config-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background: var(--ctp-overlay0);
+        border-color: var(--ctp-overlay0);
+        color: var(--ctp-subtext0);
     }
 
     button {

@@ -2,7 +2,14 @@
     import type { RevId } from "./messages/RevId";
     import type { RevResult } from "./messages/RevResult";
     import type { RepoConfig } from "./messages/RepoConfig";
-    import { type Query, query, trigger, onEvent, writeFontSize } from "./ipc.js";
+    import {
+        type Query,
+        query,
+        trigger,
+        onEvent,
+        writeFontSize,
+        writeCustomConfig,
+    } from "./ipc.js";
     import {
         currentMutation,
         currentContext,
@@ -151,6 +158,21 @@
         showOptionsDialog = false;
     }
 
+    // handle custom config write
+    async function handleWriteCustomConfig(event: CustomEvent<[string, string]>) {
+        try {
+            const [key, value] = event.detail;
+            const success = await writeCustomConfig([key, value]);
+            if (success) {
+                console.log(`config successfully written`);
+            } else {
+                console.error("failed to write config");
+            }
+        } catch (error) {
+            console.error("error writing config:", error);
+        }
+    }
+
     // save settings to jj config
     async function saveSettings(newSettings: Settings) {
         try {
@@ -246,7 +268,8 @@
                 <OptionsDialog
                     {settings}
                     on:save={handleSaveOptions}
-                    on:cancel={handleCancelOptions} />
+                    on:cancel={handleCancelOptions}
+                    on:writeCustomConfig={handleWriteCustomConfig} />
             </ModalOverlay>
         {:else if $currentInput}
             <ModalOverlay>

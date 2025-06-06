@@ -191,3 +191,16 @@ export async function writeFontSize(fontSize: number): Promise<boolean> {
         return false;
     }
 }
+
+/**
+ * save custom config
+ */
+export async function writeCustomConfig(customConfig: [string, string]): Promise<boolean> {
+    try {
+        await invoke<void>("write_custom_config", { customConfig });
+        return true;
+    } catch (error: any) {
+        console.log(error);
+        return false;
+    }
+}

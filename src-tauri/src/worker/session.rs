@@ -298,15 +298,14 @@ impl Session for WorkspaceSession<'_> {
                         read_config(self.workspace.repo_path())?;
                 }
                 SessionEvent::WriteConfigValue { scope, key, value } => {
-                    // 将key使用"."连接
                     let config_key: ConfigNamePathBuf = key.iter().collect();
                     let scope = match scope {
                         ConfigSource::User => "--user",
                         ConfigSource::Repo => "--repo",
                         _ => return Err(anyhow!("you can only set config for user or repo")),
                     };
-                    // 使用jj config set 设置值
-                    let console_result = std::process::Command::new("jj")
+                    // let console_result =
+                    std::process::Command::new("jj")
                         .arg("config")
                         .arg("set")
                         .arg(scope)
@@ -314,31 +313,7 @@ impl Session for WorkspaceSession<'_> {
                         .arg(value)
                         .output()
                         .unwrap();
-
-                    println!("console_result: {:?}", console_result);
-                    // let name: ConfigNamePathBuf = key.iter().collect();
-                    // let config_env = ConfigEnv::from_environment(&Ui::null());
-                    // let path = match scope {
-                    //     ConfigSource::User => config_env
-                    //         .user_config_paths()
-                    //         // TODO: If there are multiple config paths, is there
-                    //         // a more intelligent way to pick one?
-                    //         .next()
-                    //         .ok_or_else(|| anyhow!("No user config path found to edit"))
-                    //         .map(|p| p.to_path_buf()),
-                    //     ConfigSource::Repo => Ok(self.workspace.repo_path().join("config.toml")),
-                    //     _ => Err(anyhow!("Can't get path for config source {scope:?}")),
-                    // }
-                    // .and_then(|path| {
-                    //     let toml_value = toml_edit::Value::from_str(&value).unwrap();
-                    //     let mut file = jj_lib::config::ConfigFile::load_or_empty(scope, &path)?;
-                    //     file.set_value(&name, toml_value)?;
-                    //     file.save()?;
-                    //     Ok(())
-                    // });
-
-                    // handler::optional!(op_result);
-
+                    // todo: handle the result if failed
                     (self.data.settings, self.data.aliases_map) =
                         read_config(self.workspace.repo_path())?;
                 }
