@@ -629,14 +629,22 @@ fn add_recent_workspaces(window: Window, repo_path: &str) -> Result<()> {
     recent.insert(0, repo_path.to_owned());
     recent.truncate(5);
 
-    session_tx.send(SessionEvent::WriteConfigArray {
+    let recent = format!(
+        r#"[{}]"#,
+        recent
+            .iter()
+            .map(|s| format!("\'{}\'", s))
+            .collect::<Vec<String>>()
+            .join(",")
+    );
+    session_tx.send(SessionEvent::WriteConfigValue {
+        scope: ConfigSource::User,
         key: vec![
             "gg".to_string(),
             "ui".to_string(),
             "recent-workspaces".to_string(),
         ],
-        scope: ConfigSource::User,
-        values: recent,
+        value: recent,
     })?;
 
     Ok(())
@@ -690,6 +698,23 @@ fn write_font_size(
             scope: ConfigSource::User,
             key: vec!["gg".to_string(), "ui".to_string(), "font-size".to_string()],
             value: font_size.to_string(),
+        })
+        .map_err(InvokeError::from_error)
+}
+
+#[tauri::command(async, rename_all = "snake_case")]
+fn write_custom_config(
+    window: Window,
+    app_state: State<AppState>,
+    custom_config: (String, String),
+) -> Result<(), InvokeError> {
+    let session_tx: Sender<SessionEvent> = app_state.get_session(window.label());
+
+    session_tx
+        .send(SessionEvent::WriteConfigValue {
+            scope: ConfigSource::User,
+            key: custom_config.0.split(".").map(|s| s.to_string()).collect(),
+            value: custom_config.1.to_string(),
         })
         .map_err(InvokeError::from_error)
 }
