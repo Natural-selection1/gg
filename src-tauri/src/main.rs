@@ -634,14 +634,22 @@ fn with_recent_workspaces(
 
     f(&mut recent)?;
 
-    session_tx.send(SessionEvent::WriteConfigArray {
+    let recent = format!(
+        r#"[{}]"#,
+        recent
+            .iter()
+            .map(|s| format!("\'{}\'", s))
+            .collect::<Vec<String>>()
+            .join(",")
+    );
+    session_tx.send(SessionEvent::WriteConfigValue {
+        scope: ConfigSource::User,
         key: vec![
             "gg".to_string(),
             "ui".to_string(),
             "recent-workspaces".to_string(),
         ],
-        scope: ConfigSource::User,
-        values: recent,
+        value: recent,
     })?;
 
     Ok(())
@@ -664,7 +672,7 @@ fn write_font_size(
         .map_err(InvokeError::from_error)
 }
 
-#[tauri::command(async)]
+#[tauri::command(async, rename_all = "snake_case")]
 fn write_custom_config(
     window: Window,
     app_state: State<AppState>,
