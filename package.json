@@ -17,15 +17,15 @@
   "dependencies": {
     "@catppuccin/palette": "^1.0.3",
     "@tailwindcss/vite": "^4.1.8",
-    "@tauri-apps/api": "^2.0.0-beta.0",
-    "@tauri-apps/plugin-shell": "^2.0.0-beta.0",
+    "@tauri-apps/api": "2.0.0",
+    "@tauri-apps/plugin-shell": "2.0.0",
     "feather-icons": "^4.29.1",
     "modern-normalize": "^2.0.0",
     "tailwindcss": "^4.1.8"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.0.2",
-    "@tauri-apps/cli": "^2.0.0-beta.0",
+    "@tauri-apps/cli": "2.0.0",
     "@tsconfig/svelte": "^5.0.2",
     "jsdom": "^23.0.1",
     "prettier-plugin-svelte": "^3.4.0",
