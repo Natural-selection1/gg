@@ -381,9 +381,9 @@ async fn move_hunk_descendant_partial() -> anyhow::Result<()> {
     let source_tree = source_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match source_tree.path_value(&repo_path)?.into_resolved() {
+    match source_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -400,9 +400,9 @@ async fn move_hunk_descendant_partial() -> anyhow::Result<()> {
     let target_commit = get_rev(&ws, &revs::hunk_base())?;
     let target_tree = target_commit.tree();
 
-    match target_tree.path_value(&repo_path)?.into_resolved() {
+    match target_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -556,9 +556,9 @@ async fn move_hunk_descendant_abandons_source() -> anyhow::Result<()> {
     let target_tree = target_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match target_tree.path_value(&repo_path)?.into_resolved() {
+    match target_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -625,9 +625,9 @@ async fn move_hunk_unrelated() -> anyhow::Result<()> {
     let sibling_tree = sibling_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match sibling_tree.path_value(&repo_path)?.into_resolved() {
+    match sibling_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -727,9 +727,9 @@ async fn move_hunk_ancestor_to_descendant() -> anyhow::Result<()> {
     // Verify initial state
     let child_before = get_rev(&ws, &revs::hunk_child_single())?;
     let child_tree_before = child_before.tree();
-    match child_tree_before.path_value(&repo_path)?.into_resolved() {
+    match child_tree_before.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             assert_eq!(
@@ -744,11 +744,11 @@ async fn move_hunk_ancestor_to_descendant() -> anyhow::Result<()> {
     let grandchild_before = get_rev(&ws, &revs::hunk_grandchild())?;
     let grandchild_tree_before = grandchild_before.tree();
     match grandchild_tree_before
-        .path_value(&repo_path)?
+        .path_value(repo_path)?
         .into_resolved()
     {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             assert_eq!(
@@ -802,10 +802,10 @@ async fn move_hunk_ancestor_to_descendant() -> anyhow::Result<()> {
     let dest_after = get_rev(&ws, &revs::hunk_grandchild())?;
     let dest_tree = dest_after.tree();
 
-    let path_value = dest_tree.path_value(&repo_path)?;
+    let path_value = dest_tree.path_value(repo_path)?;
     match path_value.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -887,9 +887,9 @@ async fn move_hunk_between_siblings() -> anyhow::Result<()> {
     let source_tree = source_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match source_tree.path_value(&repo_path)?.into_resolved() {
+    match source_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -905,9 +905,9 @@ async fn move_hunk_between_siblings() -> anyhow::Result<()> {
     let target_commit = get_rev(&ws, &revs::hunk_sibling())?;
     let target_tree = target_commit.tree();
 
-    match target_tree.path_value(&repo_path)?.into_resolved() {
+    match target_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -936,9 +936,9 @@ async fn move_hunk_does_not_affect_other_files() -> anyhow::Result<()> {
     let child_tree_before = child_before.tree();
     let a_txt_path = jj_lib::repo_path::RepoPath::from_internal_string("a.txt")?;
 
-    let a_txt_content_before = match child_tree_before.path_value(&a_txt_path)?.into_resolved() {
+    let a_txt_content_before = match child_tree_before.path_value(a_txt_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&a_txt_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(a_txt_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             String::from_utf8_lossy(&content).to_string()
@@ -951,9 +951,9 @@ async fn move_hunk_does_not_affect_other_files() -> anyhow::Result<()> {
     let parent_before = get_rev(&ws, &revs::hunk_base())?;
     let parent_tree_before = parent_before.tree();
 
-    let parent_a_txt_before = match parent_tree_before.path_value(&a_txt_path)?.into_resolved() {
+    let parent_a_txt_before = match parent_tree_before.path_value(a_txt_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&a_txt_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(a_txt_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             String::from_utf8_lossy(&content).to_string()
@@ -995,9 +995,9 @@ async fn move_hunk_does_not_affect_other_files() -> anyhow::Result<()> {
     let child_after = get_rev(&ws, &revs::hunk_child_multi())?;
     let child_tree_after = child_after.tree();
 
-    let a_txt_content_after = match child_tree_after.path_value(&a_txt_path)?.into_resolved() {
+    let a_txt_content_after = match child_tree_after.path_value(a_txt_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&a_txt_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(a_txt_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             String::from_utf8_lossy(&content).to_string()
@@ -1015,9 +1015,9 @@ async fn move_hunk_does_not_affect_other_files() -> anyhow::Result<()> {
     let parent_after = get_rev(&ws, &revs::hunk_base())?;
     let parent_tree_after = parent_after.tree();
 
-    let parent_a_txt_after = match parent_tree_after.path_value(&a_txt_path)?.into_resolved() {
+    let parent_a_txt_after = match parent_tree_after.path_value(a_txt_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&a_txt_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(a_txt_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             String::from_utf8_lossy(&content).to_string()
@@ -1077,9 +1077,9 @@ async fn copy_hunk_from_parent() -> anyhow::Result<()> {
     let child_tree = child_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match child_tree.path_value(&repo_path)?.into_resolved() {
+    match child_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -1271,9 +1271,9 @@ async fn copy_hunk_multiple_hunks() -> anyhow::Result<()> {
     let child_tree = child_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match child_tree.path_value(&repo_path)?.into_resolved() {
+    match child_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -1331,9 +1331,9 @@ async fn move_hunk_second_of_two_hunks() -> anyhow::Result<()> {
     let source_tree = source_commit.tree();
     let repo_path = jj_lib::repo_path::RepoPath::from_internal_string("hunk_test.txt")?;
 
-    match source_tree.path_value(&repo_path)?.into_resolved() {
+    match source_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);
@@ -1349,9 +1349,9 @@ async fn move_hunk_second_of_two_hunks() -> anyhow::Result<()> {
     let target_commit = get_rev(&ws, &revs::hunk_sibling())?;
     let target_tree = target_commit.tree();
 
-    match target_tree.path_value(&repo_path)?.into_resolved() {
+    match target_tree.path_value(repo_path)?.into_resolved() {
         Ok(Some(jj_lib::backend::TreeValue::File { id, .. })) => {
-            let mut reader = ws.repo().store().read_file(&repo_path, &id).await?;
+            let mut reader = ws.repo().store().read_file(repo_path, &id).await?;
             let mut content = Vec::new();
             reader.read_to_end(&mut content).await?;
             let content_str = String::from_utf8_lossy(&content);

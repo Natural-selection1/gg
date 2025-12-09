@@ -975,17 +975,16 @@ impl SessionOperation {
         if let Some(git_backend) = self.git_backend() {
             let git_repo = git_backend.git_repo();
             if let Some(excludes_file_path) =
-                get_excludes_file_path(&git_repo.config_snapshot().plumbing())
+                get_excludes_file_path(git_repo.config_snapshot().plumbing())
             {
                 git_ignores = git_ignores.chain_with_file("", excludes_file_path)?;
             }
             git_ignores = git_ignores
                 .chain_with_file("", git_backend.git_repo_path().join("info").join("exclude"))?;
-        } else if let Ok(git_config) = gix::config::File::from_globals() {
-            if let Some(excludes_file_path) = get_excludes_file_path(&git_config) {
+        } else if let Ok(git_config) = gix::config::File::from_globals()
+            && let Some(excludes_file_path) = get_excludes_file_path(&git_config) {
                 git_ignores = git_ignores.chain_with_file("", excludes_file_path)?;
             }
-        }
         Ok(git_ignores)
     }
 }

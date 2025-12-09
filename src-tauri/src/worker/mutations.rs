@@ -911,12 +911,12 @@ impl Mutation for MoveHunk {
         // Construct the "sibling tree": base_tree with just this hunk applied.
         // This represents a virtual sibling commit containing only the hunk.
         let store = tx.repo().store();
-        let base_content = read_file_content(store, &base_tree, &repo_path).await?;
+        let base_content = read_file_content(store, &base_tree, repo_path).await?;
         let sibling_content = apply_hunk_to_base(&base_content, &self.hunk)?;
         let sibling_blob_id = store
-            .write_file(&repo_path, &mut sibling_content.as_slice())
+            .write_file(repo_path, &mut sibling_content.as_slice())
             .await?;
-        let sibling_executable = match from_tree.path_value(&repo_path)?.into_resolved() {
+        let sibling_executable = match from_tree.path_value(repo_path)?.into_resolved() {
             Ok(Some(TreeValue::File { executable, .. })) => executable,
             Ok(_) => false,
             Err(_) => false,
@@ -924,7 +924,7 @@ impl Mutation for MoveHunk {
         let sibling_tree = update_tree_entry(
             store,
             &base_tree,
-            &repo_path,
+            repo_path,
             sibling_blob_id,
             sibling_executable,
         )?;
@@ -1052,13 +1052,13 @@ impl Mutation for CopyHunk {
         let to_tree = to.tree();
 
         // vheck for conflicts in destination
-        let to_path_value = to_tree.path_value(&repo_path)?;
+        let to_path_value = to_tree.path_value(repo_path)?;
         if to_path_value.into_resolved().is_err() {
             precondition!("Cannot restore hunk: destination file has conflicts");
         }
 
         // read destination content
-        let to_content = read_file_content(store, &to_tree, &repo_path).await?;
+        let to_content = read_file_content(store, &to_tree, repo_path).await?;
         let to_text = String::from_utf8_lossy(&to_content);
         let to_lines: Vec<&str> = to_text.lines().collect();
 
@@ -1113,7 +1113,7 @@ impl Mutation for CopyHunk {
 
         // read source content
         let from_tree = from.tree();
-        let from_content = read_file_content(store, &from_tree, &repo_path).await?;
+        let from_content = read_file_content(store, &from_tree, repo_path).await?;
         let from_text = String::from_utf8_lossy(&from_content);
         let from_lines: Vec<&str> = from_text.lines().collect();
 
@@ -1157,16 +1157,16 @@ impl Mutation for CopyHunk {
 
         // create new destination tree with preserved executable bit
         let new_to_blob_id = store
-            .write_file(&repo_path, &mut new_to_content.as_slice())
+            .write_file(repo_path, &mut new_to_content.as_slice())
             .await?;
 
-        let to_executable = match to_tree.path_value(&repo_path)?.into_resolved() {
+        let to_executable = match to_tree.path_value(repo_path)?.into_resolved() {
             Ok(Some(TreeValue::File { executable, .. })) => executable,
             _ => false,
         };
 
         let new_to_tree =
-            update_tree_entry(store, &to_tree, &repo_path, new_to_blob_id, to_executable)?;
+            update_tree_entry(store, &to_tree, repo_path, new_to_blob_id, to_executable)?;
 
         // rewrite destination
         tx.repo_mut()
@@ -1436,7 +1436,7 @@ impl Mutation for GitFetch {
                     .map(StringExpression::exact)
                     .unwrap_or_else(StringExpression::all);
                 let refspecs =
-                    git::expand_fetch_refspecs(&RemoteName::new(&remote_name), bookmark_expr)?;
+                    git::expand_fetch_refspecs(RemoteName::new(&remote_name), bookmark_expr)?;
                 fetcher
                     .fetch(RemoteName::new(&remote_name), refspecs, cb, None, None)
                     .context("failed to fetch")?;
@@ -1598,7 +1598,7 @@ fn apply_hunk_to_base(base_content: &[u8], hunk: &crate::messages::ChangeHunk) -
     let ends_with_newline = base_content.ends_with(b"\n");
 
     let mut result_lines: Vec<String> = Vec::new();
-    let mut hunk_lines = hunk.lines.lines.iter().peekable();
+    let hunk_lines = hunk.lines.lines.iter().peekable();
 
     // Convert 1-indexed line number to 0-indexed
     let hunk_start = hunk.location.from_file.start.saturating_sub(1);
@@ -1607,7 +1607,7 @@ fn apply_hunk_to_base(base_content: &[u8], hunk: &crate::messages::ChangeHunk) -
     result_lines.extend(base_lines[..hunk_start].iter().map(|s| s.to_string()));
     let mut base_idx = hunk_start;
 
-    while let Some(diff_line) = hunk_lines.next() {
+    for diff_line in hunk_lines {
         if diff_line.starts_with(' ') || diff_line.starts_with('-') {
             // Context or deletion: verify the base content matches
             let expected = &diff_line[1..];
@@ -1626,9 +1626,9 @@ fn apply_hunk_to_base(base_content: &[u8], hunk: &crate::messages::ChangeHunk) -
                     base_lines.get(base_idx).map_or("<EOF>", |l| l.trim_end())
                 );
             }
-        } else if diff_line.starts_with('+') {
+        } else if let Some(added) = diff_line.strip_prefix('+') {
             // Addition: include in result
-            let added = diff_line[1..].trim_end_matches('\n');
+            let added = added.trim_end_matches('\n');
             result_lines.push(added.to_string());
         } else {
             anyhow::bail!("Malformed diff line: {}", diff_line);
