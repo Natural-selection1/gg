@@ -5,11 +5,12 @@ use ts_rs::TS;
 use super::*;
 
 /// A change or commit id with a disambiguated prefix
-#[allow(dead_code)] // the frontend needs these structs kept in sync
+#[expect(dead_code)] // the frontend needs these structs kept in sync
 pub trait Id {
     fn hex(&self) -> &String;
     fn prefix(&self) -> &String;
     fn rest(&self) -> &String;
+    fn multiple_of_four_prefix(&self) -> String;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -31,6 +32,13 @@ impl Id for CommitId {
     fn rest(&self) -> &String {
         &self.rest
     }
+    fn multiple_of_four_prefix(&self) -> String {
+        let prefix = self.prefix.len().div_ceil(4) * 4;
+        match prefix > self.hex.len() {
+            true => self.hex.clone(),
+            false => self.hex[..prefix].into(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -51,6 +59,13 @@ impl Id for ChangeId {
     }
     fn rest(&self) -> &String {
         &self.rest
+    }
+    fn multiple_of_four_prefix(&self) -> String {
+        let prefix = self.prefix.len().div_ceil(4) * 4;
+        match prefix > self.hex.len() {
+            true => self.hex.clone(),
+            false => self.hex[..prefix].into(),
+        }
     }
 }
 
