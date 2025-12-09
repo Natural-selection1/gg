@@ -1923,7 +1923,6 @@ dependencies = [
  "dunce",
  "futures-util",
  "gix",
- "indexmap 2.12.1",
  "itertools 0.14.0",
  "jj-cli",
  "jj-lib",

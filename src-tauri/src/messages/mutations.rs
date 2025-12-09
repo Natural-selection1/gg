@@ -90,6 +90,7 @@ pub struct CopyHunk {
 pub struct DescribeRevision {
     pub id: RevId,
     pub new_description: String,
+    #[expect(unused)]
     pub reset_author: bool,
 }
 

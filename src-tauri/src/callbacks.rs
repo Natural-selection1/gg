@@ -59,6 +59,7 @@ impl WorkerCallbacks for FrontendCallbacks {
 }
 
 impl FrontendCallbacks {
+    #[expect(unused)]
     fn request_input<T: IntoIterator<Item = U>, U: Into<InputField>>(
         &self,
         detail: String,
@@ -104,6 +105,7 @@ impl FrontendCallbacks {
     }
 }
 
+#[expect(unused)]
 // simplistic, but it's the same as the version in jj_cli::git_util
 fn get_ssh_keys(_username: &str) -> Vec<PathBuf> {
     let mut paths = vec![];

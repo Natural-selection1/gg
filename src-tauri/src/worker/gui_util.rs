@@ -1,60 +1,50 @@
 //! Analogous to cli_util from jj-cli
 //! We reuse a bit of jj-cli code, but many of its modules include TUI concerns or are not suitable for a long-running server
 
-use std::{
-    cell::OnceCell,
-    collections::HashMap,
-    env::VarError,
-    path::{Path, PathBuf},
-    rc::Rc,
-    slice,
-    sync::Arc,
-};
+use std::cell::OnceCell;
+use std::collections::HashMap;
+use std::ffi::OsStr;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+use std::path::Path;
+use std::process::Command;
+use std::slice;
+use std::{rc::Rc, sync::Arc};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::TimeZone;
 use itertools::Itertools;
-use jj_cli::{
-    cli_util::{default_ignored_remote_name, short_operation_hash},
-    git_util::is_colocated_git_workspace,
-    revset_util,
+use jj_cli::cli_util::default_ignored_remote_name;
+use jj_cli::git_util::is_colocated_git_workspace;
+use jj_cli::revset_util;
+use jj_lib::backend::{BackendError, ChangeId, CommitId};
+use jj_lib::commit::Commit;
+use jj_lib::default_index::DefaultReadonlyIndex;
+use jj_lib::file_util;
+use jj_lib::git::{self, REMOTE_NAME_FOR_LOCAL_GIT_REPO};
+use jj_lib::git_backend::GitBackend;
+use jj_lib::id_prefix::{IdPrefixContext, IdPrefixIndex};
+use jj_lib::object_id::ObjectId;
+use jj_lib::op_heads_store;
+use jj_lib::operation::Operation;
+use jj_lib::ref_name::WorkspaceName;
+use jj_lib::repo::{ReadonlyRepo, Repo, RepoLoaderError, StoreFactories};
+use jj_lib::repo_path::{RepoPath, RepoPathUiConverter};
+use jj_lib::revset::{
+    self, Revset, RevsetAliasesMap, RevsetDiagnostics, RevsetEvaluationError, RevsetExpression,
+    RevsetExtensions, RevsetIteratorExt, RevsetParseContext, RevsetResolutionError,
+    RevsetWorkspaceContext, SymbolResolverExtension, UserRevsetExpression,
 };
-use jj_lib::{
-    backend::{BackendError, ChangeId, CommitId},
-    commit::Commit,
-    default_index::DefaultReadonlyIndex,
-    file_util,
-    git::{self, REMOTE_NAME_FOR_LOCAL_GIT_REPO},
-    git_backend::GitBackend,
-    gitignore::GitIgnoreFile,
-    id_prefix::{IdPrefixContext, IdPrefixIndex},
-    matchers::{EverythingMatcher, NothingMatcher},
-    object_id::ObjectId,
-    op_heads_store,
-    operation::Operation,
-    ref_name::WorkspaceName,
-    repo::{ReadonlyRepo, Repo, RepoLoaderError, StoreFactories},
-    repo_path::{RepoPath, RepoPathUiConverter},
-    revset::{
-        self, Revset, RevsetAliasesMap, RevsetDiagnostics, RevsetEvaluationError, RevsetExpression,
-        RevsetExtensions, RevsetIteratorExt, RevsetParseContext, RevsetResolutionError,
-        RevsetWorkspaceContext, SymbolResolverExtension, UserRevsetExpression,
-    },
-    rewrite::{self, RebaseOptions, RebasedCommit},
-    settings::{HumanByteSize, UserSettings},
-    transaction::Transaction,
-    view::View,
-    working_copy::{CheckoutStats, SnapshotOptions, WorkingCopyFreshness},
-    workspace::{self, DefaultWorkspaceLoaderFactory, Workspace, WorkspaceLoaderFactory},
-};
+use jj_lib::settings::UserSettings;
+use jj_lib::transaction::Transaction;
+use jj_lib::view::View;
+use jj_lib::working_copy::CheckoutStats;
+use jj_lib::workspace::{self, DefaultWorkspaceLoaderFactory, Workspace, WorkspaceLoaderFactory};
 use thiserror::Error;
 
 use super::WorkerSession;
-
-use crate::{
-    config::{GGSettings, read_config},
-    messages::{self, RevId},
-};
+use crate::config::{GGSettings, read_config};
+use crate::messages::{self, RevId};
 
 /// jj-dependent state, available when a workspace is open
 pub struct WorkspaceSession<'a> {
@@ -224,6 +214,7 @@ impl WorkspaceSession<'_> {
         self.evaluate_revset_expr(expr)
     }
 
+    #[allow(unused)]
     pub fn evaluate_revset_changes<'op>(
         &'op self,
         ids: &[messages::ChangeId],
@@ -364,6 +355,7 @@ impl WorkspaceSession<'_> {
         Ok(commits)
     }
 
+    #[expect(unused)]
     pub fn resolve_multiple_commits(
         &self,
         ids: &[messages::CommitId],
@@ -374,6 +366,7 @@ impl WorkspaceSession<'_> {
     }
 
     // XXX ideally this would apply the same policy as resolve_single_change
+    #[expect(dead_code)]
     pub fn resolve_multiple_changes(
         &self,
         ids: impl IntoIterator<Item = RevId>,
@@ -618,112 +611,12 @@ impl WorkspaceSession<'_> {
             return Ok(false);
         }
 
-        if self.is_colocated {
-            self.import_git_head().await?;
-        }
+        run_jj(["git", "import"])
+            .current_dir(self.workspace.workspace_root())
+            .output()
+            .expect("Failed to run jj git import");
 
-        let updated_working_copy = self.snapshot_working_copy().await?;
-
-        if self.is_colocated {
-            self.import_git_refs()?;
-        }
-
-        Ok(updated_working_copy)
-    }
-
-    async fn snapshot_working_copy(&mut self) -> Result<bool> {
-        let workspace_name = self.workspace.workspace_name().to_owned();
-        let get_wc_commit = |repo: &ReadonlyRepo| -> Result<Option<_>, _> {
-            repo.view()
-                .get_wc_commit_id(&workspace_name)
-                .map(|id| repo.store().get_commit(id))
-                .transpose()
-        };
-        let repo = self.operation.repo.clone();
-        let Some(wc_commit) = get_wc_commit(&repo)? else {
-            return Ok(false); // The workspace has been deleted
-        };
-
-        let base_ignores = self.operation.base_ignores()?;
-
-        // Compare working-copy tree and operation with repo's, and reload as needed.
-        let mut locked_ws = self.workspace.start_working_copy_mutation()?;
-        let old_op_id = locked_ws.locked_wc().old_operation_id().clone();
-        let (repo, wc_commit) = match WorkingCopyFreshness::check_stale(
-            locked_ws.locked_wc(),
-            &wc_commit,
-            &repo,
-        )? {
-            WorkingCopyFreshness::Fresh => (repo, wc_commit),
-            WorkingCopyFreshness::Updated(wc_operation) => {
-                let repo = repo.reload_at(&wc_operation)?;
-                let wc_commit = if let Some(wc_commit) = get_wc_commit(&repo)? {
-                    wc_commit
-                } else {
-                    return Ok(false);
-                };
-                (repo, wc_commit)
-            }
-            WorkingCopyFreshness::WorkingCopyStale => {
-                return Err(anyhow!(
-                    "The working copy is stale (not updated since operation {}). Run `jj workspace update-stale` to update it.",
-                    short_operation_hash(&old_op_id)
-                ));
-            }
-            WorkingCopyFreshness::SiblingOperation => {
-                return Err(anyhow!(
-                    "The repo was loaded at operation {}, which seems to be a sibling of the working copy's operation {}",
-                    short_operation_hash(repo.op_id()),
-                    short_operation_hash(&old_op_id)
-                ));
-            }
-        };
-
-        let HumanByteSize(mut max_new_file_size) = self
-            .data
-            .workspace_settings
-            .get_value_with("snapshot.max-new-file-size", TryInto::try_into)?;
-        if max_new_file_size == 0 {
-            max_new_file_size = u64::MAX;
-        }
-        let (new_tree_id, _) = locked_ws
-            .locked_wc()
-            .snapshot(&SnapshotOptions {
-                base_ignores,
-                progress: None,
-                max_new_file_size,
-                start_tracking_matcher: &EverythingMatcher,
-                force_tracking_matcher: &NothingMatcher,
-            })
-            .await?;
-
-        let did_anything = new_tree_id.tree_ids() != wc_commit.tree_ids();
-
-        if did_anything {
-            let mut tx = repo.start_transaction();
-            let mut_repo = tx.repo_mut();
-            let commit = mut_repo
-                .rewrite_commit(&wc_commit)
-                .set_tree(new_tree_id)
-                .write()?;
-            mut_repo.set_wc_commit(workspace_name.clone(), commit.id().clone())?;
-
-            mut_repo.rebase_descendants()?;
-
-            if self.is_colocated {
-                git::export_refs(mut_repo)?;
-            }
-
-            self.operation = SessionOperation::new(
-                &workspace_name,
-                &self.data,
-                tx.commit("snapshot working copy")?,
-            );
-        }
-
-        locked_ws.finish(self.operation.repo.op_id().clone())?;
-
-        Ok(did_anything)
+        self.load_at_head()
     }
 
     fn update_working_copy(
@@ -746,132 +639,6 @@ impl WorkspaceSession<'_> {
                 None
             },
         )
-    }
-
-    async fn import_git_head(&mut self) -> Result<()> {
-        let mut tx = self.operation.repo.start_transaction();
-        git::import_head(tx.repo_mut())?;
-        if !tx.repo().has_changes() {
-            return Ok(());
-        }
-
-        let new_git_head = tx.repo().view().git_head().clone();
-        if let Some(new_git_head_id) = new_git_head.as_normal() {
-            let workspace_name = self.workspace.workspace_name().to_owned();
-
-            if let Some(old_wc_commit_id) =
-                self.operation.repo.view().get_wc_commit_id(&workspace_name)
-            {
-                let old_wc_commit = tx.repo().store().get_commit(old_wc_commit_id)?;
-                tx.repo_mut().record_abandoned_commit(&old_wc_commit);
-            }
-
-            let new_git_head_commit = tx.repo().store().get_commit(new_git_head_id)?;
-            tx.repo_mut()
-                .check_out(workspace_name.clone(), &new_git_head_commit)?;
-
-            let mut locked_ws = self.workspace.start_working_copy_mutation()?;
-
-            locked_ws.locked_wc().reset(&new_git_head_commit).await?;
-            tx.repo_mut().rebase_descendants()?;
-
-            self.operation =
-                SessionOperation::new(&workspace_name, &self.data, tx.commit("import git head")?);
-
-            locked_ws.finish(self.operation.repo.op_id().clone())?;
-        } else {
-            self.finish_transaction(tx, "import git head")?;
-        }
-        Ok(())
-    }
-
-    fn import_git_refs(&mut self) -> Result<()> {
-        let git_settings = git::GitSettings::from_settings(&self.data.workspace_settings)?;
-        let mut tx = self.operation.repo.start_transaction();
-        // Automated import shouldn't fail because of reserved remote name.
-        let stats = jj_lib::git::import_refs(tx.repo_mut(), &git_settings)?;
-        if !tx.repo().has_changes() {
-            return Ok(());
-        }
-
-        tx.repo_mut().rebase_descendants()?;
-
-        self.finish_transaction(tx, format!("import git refs: {:?}", stats))?;
-        Ok(())
-    }
-
-    /*************************************************************************************************/
-    /* Rebase functions - the idea is to have several composable rebase ops that use these utilities */
-    /* arguably they should be in a Transaction-wrapper struct, but i'm not yet sure whether to      */
-    /* complicate the interface of trait Mutation                                                    */
-    /*************************************************************************************************/
-
-    pub async fn disinherit_children(
-        &self,
-        tx: &mut Transaction,
-        target: &Commit,
-    ) -> Result<HashMap<CommitId, CommitId>> {
-        // find all children of target
-        let children_expr = RevsetExpression::commit(target.id().clone()).children();
-        let children: Vec<_> = children_expr
-            .evaluate(self.operation.repo.as_ref())?
-            .iter()
-            .commits(self.operation.repo.store())
-            .try_collect()?;
-
-        // rebase each child, and then auto-rebase their descendants
-        let mut rebased_commit_ids = HashMap::new();
-        for child_commit in children {
-            let new_child_parent_ids = child_commit
-                .parent_ids()
-                .iter()
-                .flat_map(|c| {
-                    if c == target.id() {
-                        target.parent_ids().to_vec()
-                    } else {
-                        vec![c.clone()]
-                    }
-                })
-                .collect_vec();
-
-            // some of the new parents may be ancestors of others
-            let new_child_parents_expression =
-                RevsetExpression::commits(new_child_parent_ids.clone()).minus(
-                    &RevsetExpression::commits(new_child_parent_ids.clone())
-                        .parents()
-                        .ancestors(),
-                );
-            let new_child_parents: Result<Vec<CommitId>, _> = new_child_parents_expression
-                .evaluate(tx.base_repo().as_ref())?
-                .iter()
-                .collect();
-
-            rebased_commit_ids.insert(
-                child_commit.id().clone(),
-                rewrite::rebase_commit(tx.repo_mut(), child_commit, new_child_parents?)
-                    .await?
-                    .id()
-                    .clone(),
-            );
-        }
-        {
-            let mut mapping = HashMap::new();
-            tx.repo_mut().rebase_descendants_with_options(
-                &RebaseOptions::default(),
-                |old_commit, rebased| {
-                    mapping.insert(
-                        old_commit.id().clone(),
-                        match rebased {
-                            RebasedCommit::Rewritten(new_commit) => new_commit.id().clone(),
-                            RebasedCommit::Abandoned { parent_id } => parent_id,
-                        },
-                    );
-                },
-            )?;
-            rebased_commit_ids.extend(mapping);
-        }
-
-        Ok(rebased_commit_ids)
     }
 }
 
@@ -946,47 +713,6 @@ impl SessionOperation {
 
     fn git_backend(&self) -> Option<&GitBackend> {
         self.repo.store().backend_impl::<GitBackend>()
-    }
-
-    // XXX out of snyc with jj-cli version
-    pub fn base_ignores(&self) -> Result<Arc<GitIgnoreFile>> {
-        let get_excludes_file_path = |config: &gix::config::File| -> Option<PathBuf> {
-            // TODO: maybe use path() and interpolate(), which can process non-utf-8
-            // path on Unix.
-            if let Some(value) = config.string("core.excludesFile") {
-                std::str::from_utf8(&value)
-                    .ok()
-                    .map(file_util::expand_home_path)
-            } else {
-                xdg_config_home().ok().map(|x| x.join("git").join("ignore"))
-            }
-        };
-
-        fn xdg_config_home() -> Result<PathBuf, VarError> {
-            if let Ok(x) = std::env::var("XDG_CONFIG_HOME")
-                && !x.is_empty()
-            {
-                return Ok(PathBuf::from(x));
-            }
-            std::env::var("HOME").map(|x| Path::new(&x).join(".config"))
-        }
-
-        let mut git_ignores = GitIgnoreFile::empty();
-        if let Some(git_backend) = self.git_backend() {
-            let git_repo = git_backend.git_repo();
-            if let Some(excludes_file_path) =
-                get_excludes_file_path(git_repo.config_snapshot().plumbing())
-            {
-                git_ignores = git_ignores.chain_with_file("", excludes_file_path)?;
-            }
-            git_ignores = git_ignores
-                .chain_with_file("", git_backend.git_repo_path().join("info").join("exclude"))?;
-        } else if let Ok(git_config) = gix::config::File::from_globals()
-            && let Some(excludes_file_path) = get_excludes_file_path(&git_config)
-        {
-            git_ignores = git_ignores.chain_with_file("", excludes_file_path)?;
-        }
-        Ok(git_ignores)
     }
 }
 
@@ -1157,4 +883,12 @@ pub fn get_git_remote_names(git_repo: &gix::Repository) -> Vec<String> {
         })
         .map(|remote| remote.to_string())
         .collect()
+}
+
+pub fn run_jj(args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Command {
+    let mut command = Command::new("jj");
+    command.args(args);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    command
 }

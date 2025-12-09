@@ -41,7 +41,7 @@ config = { version = "0.13.4", default-features = false, features = ["toml"] }
 dirs = "6"
 dunce = "1.0.5"
 itertools = "0.14"
-indexmap = "2.12"
+# indexmap = "2.12"
 gix = { version = "0.75.0", default-features = false, features = [
     "index",
     "max-performance-safe",

@@ -45,6 +45,7 @@ pub trait Mutation: Debug {
 
 /// implemented by UI layers to request user input and receive progress
 pub trait WorkerCallbacks {
+    #[expect(unused)]
     fn with_git(
         &self,
         repo: &mut MutableRepo,
@@ -68,6 +69,7 @@ impl WorkerCallbacks for NoCallbacks {
 pub struct WorkerSession {
     pub force_log_page_size: Option<usize>,
     pub latest_query: Option<String>,
+    #[expect(unused)]
     pub callbacks: Box<dyn WorkerCallbacks>,
     pub working_directory: Option<PathBuf>,
     pub user_settings: Option<UserSettings>,

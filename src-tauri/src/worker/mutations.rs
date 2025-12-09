@@ -1,46 +1,32 @@
-use std::fmt::Display;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
-use indexmap::IndexMap;
-use itertools::Itertools;
+use anyhow::{Result, anyhow};
 use jj_lib::backend::{CopyId, FileId, TreeValue};
-use jj_lib::conflicts::{
-    self, ConflictMarkerStyle, ConflictMaterializeOptions, MaterializedTreeValue,
-};
+use jj_lib::commit::Commit;
+use jj_lib::conflicts;
+use jj_lib::conflicts::{ConflictMarkerStyle, ConflictMaterializeOptions, MaterializedTreeValue};
 use jj_lib::files::FileMergeHunkLevel;
+use jj_lib::git::REMOTE_NAME_FOR_LOCAL_GIT_REPO;
 use jj_lib::merge::{Merge, SameChange};
 use jj_lib::merged_tree::{MergedTree, MergedTreeBuilder};
-use jj_lib::ref_name::{RefNameBuf, RemoteName, RemoteNameBuf, RemoteRefSymbol};
+use jj_lib::object_id::ObjectId as ObjectIdTrait;
+use jj_lib::repo::Repo;
+use jj_lib::repo_path::RepoPath;
+use jj_lib::rewrite::{RebaseOptions, RebasedCommit};
+use jj_lib::store::Store;
+use jj_lib::str_util::StringPattern;
 use jj_lib::tree_merge::MergeOptions;
-use jj_lib::{
-    backend::{BackendError, CommitId},
-    commit::Commit,
-    git::{self, GitBranchPushTargets, REMOTE_NAME_FOR_LOCAL_GIT_REPO},
-    matchers::{EverythingMatcher, FilesMatcher, Matcher},
-    object_id::ObjectId as ObjectIdTrait,
-    op_store::{RefTarget, RemoteRef, RemoteRefState},
-    op_walk,
-    refs::{self, BookmarkPushAction, BookmarkPushUpdate, LocalAndRemoteRef},
-    repo::Repo,
-    repo_path::RepoPath,
-    revset::{self, RevsetIteratorExt},
-    rewrite::{self, RebaseOptions, RebasedCommit},
-    settings::UserSettings,
-    store::Store,
-    str_util::{StringExpression, StringPattern},
-};
 use tokio::io::AsyncReadExt;
 
+use super::Mutation;
+use super::gui_util::WorkspaceSession;
 use crate::messages::{
     AbandonRevisions, BackoutRevisions, CheckoutRevision, CopyChanges, CopyHunk, CreateRef,
     CreateRevision, CreateRevisionBetween, DeleteRef, DescribeRevision, DuplicateRevisions,
-    GitFetch, GitPush, InsertRevision, MoveChanges, MoveHunk, MoveRef, MoveRevision, MoveSource,
-    MutationResult, RenameBranch, StoreRef, TrackBranch, TreePath, UndoOperation, UntrackBranch,
+    GitFetch, GitPush, Id, InsertRevision, MoveChanges, MoveHunk, MoveRef, MoveRevision,
+    MoveSource, MutationResult, RenameBranch, StoreRef, TrackBranch, UndoOperation, UntrackBranch,
 };
-
-use super::Mutation;
-use super::gui_util::{WorkspaceSession, get_git_remote_names};
+use crate::worker::gui_util::run_jj;
 
 macro_rules! precondition {
     ($($args:tt)*) => {
@@ -51,41 +37,25 @@ macro_rules! precondition {
 #[async_trait::async_trait(?Send)]
 impl Mutation for AbandonRevisions {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["abandon"])
+            .args(self.ids.iter().map(|id| id.multiple_of_four_prefix()))
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let abandoned_ids = self
-            .ids
-            .into_iter()
-            .map(|id| CommitId::try_from_hex(&id.hex).expect("frontend-validated id"))
-            .collect_vec();
-
-        if ws.check_immutable(abandoned_ids.clone())? {
-            precondition!("Some revisions are immutable");
-        }
-
-        for id in &abandoned_ids {
-            let commit = tx
-                .repo()
-                .store()
-                .get_commit(id)
-                .context("Failed to lookup commit")?;
-            tx.repo_mut().record_abandoned_commit(&commit);
-        }
-        tx.repo_mut().rebase_descendants()?;
-
-        let transaction_description = if abandoned_ids.len() == 1 {
-            format!("abandon commit {}", abandoned_ids[0].hex())
-        } else {
-            format!(
-                "abandon commit {} and {} more",
-                abandoned_ids[0].hex(),
-                abandoned_ids.len() - 1
-            )
-        };
-
-        match ws.finish_transaction(tx, transaction_description)? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj abandon: {e}")),
         }
     }
 }
@@ -93,29 +63,30 @@ impl Mutation for AbandonRevisions {
 #[async_trait::async_trait(?Send)]
 impl Mutation for BackoutRevisions {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        if self.ids.len() != 1 {
-            precondition!("Not implemented for >1 rev");
-        }
+        let result = run_jj(["revert"])
+            .args(
+                self.ids
+                    .iter()
+                    .flat_map(|id| ["-r".into(), id.change.multiple_of_four_prefix()]),
+            )
+            .args(["--onto", "@"])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let mut tx = ws.start_transaction().await?;
-
-        let working_copy = ws.get_commit(ws.wc_id())?;
-        let reverted = ws.resolve_multiple_changes(self.ids)?;
-        let reverted_parents: Result<Vec<_>, BackendError> = reverted[0].parents().collect();
-
-        let old_base_tree = rewrite::merge_commit_trees(tx.repo(), &reverted_parents?).await?;
-        let new_base_tree = working_copy.tree();
-        let old_tree = reverted[0].tree();
-        let new_tree = new_base_tree.merge(old_tree, old_base_tree).await?;
-
-        tx.repo_mut()
-            .rewrite_commit(&working_copy)
-            .set_tree(new_tree)
-            .write()?;
-
-        match ws.finish_transaction(tx, format!("back out commit {}", reverted[0].id().hex()))? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj revert: {e}")),
         }
     }
 }
@@ -123,29 +94,27 @@ impl Mutation for BackoutRevisions {
 #[async_trait::async_trait(?Send)]
 impl Mutation for CheckoutRevision {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["edit", &self.id.commit.multiple_of_four_prefix()])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let edited = ws.resolve_single_change(&self.id)?;
-
-        if ws.check_immutable(vec![edited.id().clone()])? {
-            precondition!("Revision is immutable");
-        }
-
-        if edited.id() == ws.wc_id() {
-            return Ok(MutationResult::Unchanged);
-        }
-
-        tx.repo_mut().edit(ws.name().to_owned(), &edited)?;
-
-        match ws.finish_transaction(tx, format!("edit commit {}", edited.id().hex()))? {
-            Some(new_status) => {
-                let new_selection = ws.format_header(&edited, Some(false))?;
-                Ok(MutationResult::UpdatedSelection {
-                    new_status,
-                    new_selection,
-                })
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    let working_copy = ws.get_commit(ws.wc_id())?;
+                    let new_selection = ws.format_header(&working_copy, Some(false))?;
+                    Ok(MutationResult::UpdatedSelection {
+                        new_status: ws.format_status(),
+                        new_selection,
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
             }
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj edit: {e}")),
         }
     }
 }
@@ -153,33 +122,32 @@ impl Mutation for CheckoutRevision {
 #[async_trait::async_trait(?Send)]
 impl Mutation for CreateRevision {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["new"])
+            .args(
+                self.parent_ids
+                    .iter()
+                    .map(|id| id.change.multiple_of_four_prefix()),
+            )
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let parents_revset = ws.evaluate_revset_changes(
-            &self
-                .parent_ids
-                .into_iter()
-                .map(|id| id.change)
-                .collect_vec(),
-        )?;
-
-        let parent_ids: Result<_, _> = parents_revset.iter().collect();
-        let parent_commits = ws.resolve_multiple(parents_revset)?;
-        let merged_tree = rewrite::merge_commit_trees(tx.repo(), &parent_commits).await?;
-
-        let new_commit = tx.repo_mut().new_commit(parent_ids?, merged_tree).write()?;
-
-        tx.repo_mut().edit(ws.name().to_owned(), &new_commit)?;
-
-        match ws.finish_transaction(tx, "new empty commit")? {
-            Some(new_status) => {
-                let new_selection = ws.format_header(&new_commit, Some(false))?;
-                Ok(MutationResult::UpdatedSelection {
-                    new_status,
-                    new_selection,
-                })
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    let working_copy = ws.get_commit(ws.wc_id())?;
+                    let new_selection = ws.format_header(&working_copy, Some(false))?;
+                    Ok(MutationResult::UpdatedSelection {
+                        new_status: ws.format_status(),
+                        new_selection,
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
             }
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj new: {e}")),
         }
     }
 }
@@ -187,38 +155,29 @@ impl Mutation for CreateRevision {
 #[async_trait::async_trait(?Send)]
 impl Mutation for CreateRevisionBetween {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        eprintln!("CreateREvisionBetween execute()");
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["new"])
+            .args(["-A", &self.after_id.multiple_of_four_prefix()])
+            .args(["-B", &self.before_id.change.multiple_of_four_prefix()])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let parent_id = ws
-            .resolve_single_commit(&self.after_id)
-            .context("resolve after_id")?;
-        let parent_ids = vec![parent_id.id().clone()];
-        let parent_commits = vec![parent_id];
-        let merged_tree = rewrite::merge_commit_trees(tx.repo(), &parent_commits).await?;
-
-        let new_commit = tx.repo_mut().new_commit(parent_ids, merged_tree).write()?;
-
-        let before_commit = ws
-            .resolve_single_change(&self.before_id)
-            .context("resolve before_id")?;
-        if ws.check_immutable(vec![before_commit.id().clone()])? {
-            precondition!("'Before' revision is immutable");
-        }
-
-        rewrite::rebase_commit(tx.repo_mut(), before_commit, vec![new_commit.id().clone()]).await?;
-
-        tx.repo_mut().edit(ws.name().to_owned(), &new_commit)?;
-
-        match ws.finish_transaction(tx, "new empty commit")? {
-            Some(new_status) => {
-                let new_selection = ws.format_header(&new_commit, Some(false))?;
-                Ok(MutationResult::UpdatedSelection {
-                    new_status,
-                    new_selection,
-                })
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    let working_copy = ws.get_commit(ws.wc_id())?;
+                    let new_selection = ws.format_header(&working_copy, Some(false))?;
+                    Ok(MutationResult::UpdatedSelection {
+                        new_status: ws.format_status(),
+                        new_selection,
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
             }
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj new: {e}")),
         }
     }
 }
@@ -226,33 +185,25 @@ impl Mutation for CreateRevisionBetween {
 #[async_trait::async_trait(?Send)]
 impl Mutation for DescribeRevision {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["describe", &self.id.change.multiple_of_four_prefix()])
+            .args(["-m", &self.new_description])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let described = ws.resolve_single_change(&self.id)?;
-
-        if ws.check_immutable(vec![described.id().clone()])? {
-            precondition!("Revision {} is immutable", self.id.change.prefix);
-        }
-
-        if self.new_description == described.description() && !self.reset_author {
-            return Ok(MutationResult::Unchanged);
-        }
-
-        let mut commit_builder = tx
-            .repo_mut()
-            .rewrite_commit(&described)
-            .set_description(self.new_description);
-
-        if self.reset_author {
-            let new_author = commit_builder.committer().clone();
-            commit_builder = commit_builder.set_author(new_author);
-        }
-
-        commit_builder.write()?;
-
-        match ws.finish_transaction(tx, format!("describe commit {}", described.id().hex()))? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj describe: {e}")),
         }
     }
 }
@@ -260,53 +211,29 @@ impl Mutation for DescribeRevision {
 #[async_trait::async_trait(?Send)]
 impl Mutation for DuplicateRevisions {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["duplicate"])
+            .args(
+                self.ids
+                    .iter()
+                    .map(|id| id.change.multiple_of_four_prefix()),
+            )
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let clonees = ws.resolve_multiple_changes(self.ids)?; // in reverse topological order
-        let num_clonees = clonees.len();
-        let mut clones: IndexMap<Commit, Commit> = IndexMap::new();
-
-        // toposort ensures that parents are duplicated first
-        for clonee in clonees.into_iter().rev() {
-            let clone_parents: Result<Vec<_>, _> = clonee
-                .parents()
-                .map_ok(|parent| {
-                    if let Some(cloned_parent) = clones.get(&parent) {
-                        cloned_parent
-                    } else {
-                        &parent
-                    }
-                    .id()
-                    .clone()
-                })
-                .collect();
-            let clone = tx
-                .repo_mut()
-                .rewrite_commit(&clonee)
-                .clear_rewrite_source()
-                .generate_new_change_id()
-                .set_parents(clone_parents?)
-                .write()?;
-            clones.insert(clonee, clone);
-        }
-
-        match ws.finish_transaction(tx, format!("duplicating {} commit(s)", num_clonees))? {
-            Some(new_status) => {
-                if num_clonees == 1 {
-                    let new_commit = clones
-                        .get_index(0)
-                        .ok_or(anyhow!("single source should have single copy"))?
-                        .1;
-                    let new_selection = ws.format_header(new_commit, None)?;
-                    Ok(MutationResult::UpdatedSelection {
-                        new_status,
-                        new_selection,
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
                     })
                 } else {
-                    Ok(MutationResult::Updated { new_status })
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
                 }
             }
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj duplicate: {e}")),
         }
     }
 }
@@ -314,39 +241,27 @@ impl Mutation for DuplicateRevisions {
 #[async_trait::async_trait(?Send)]
 impl Mutation for InsertRevision {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["rebase"])
+            .args(["-r", &self.id.change.multiple_of_four_prefix()])
+            .args(["--after", &self.after_id.change.multiple_of_four_prefix()])
+            .args(["--before", &self.before_id.change.multiple_of_four_prefix()])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let target = ws
-            .resolve_single_change(&self.id)
-            .context("resolve change_id")?;
-        let before = ws
-            .resolve_single_change(&self.before_id)
-            .context("resolve before_id")?;
-        let after = ws
-            .resolve_single_change(&self.after_id)
-            .context("resolve after_id")?;
-
-        if ws.check_immutable(vec![target.id().clone(), before.id().clone()])? {
-            precondition!("Some revisions are immutable");
-        }
-
-        // rebase the target's children
-        let rebased_children = ws.disinherit_children(&mut tx, &target).await?;
-
-        // update after, which may have been a descendant of target
-        let after_id = rebased_children
-            .get(after.id())
-            .unwrap_or(after.id())
-            .clone();
-
-        // rebase the target (which now has no children), then the new post-target tree atop it
-        let rebased_id = target.id().hex();
-        let target = rewrite::rebase_commit(tx.repo_mut(), target, vec![after_id]).await?;
-        rewrite::rebase_commit(tx.repo_mut(), before, vec![target.id().clone()]).await?;
-
-        match ws.finish_transaction(tx, format!("rebase commit {}", rebased_id))? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj rebase: {e}")),
         }
     }
 }
@@ -354,36 +269,30 @@ impl Mutation for InsertRevision {
 #[async_trait::async_trait(?Send)]
 impl Mutation for MoveRevision {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["rebase"])
+            .args(["-r", &self.id.change.multiple_of_four_prefix()])
+            .args(
+                self.parent_ids
+                    .iter()
+                    .flat_map(|id| ["-o".into(), id.change.multiple_of_four_prefix()]),
+            )
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let target = ws.resolve_single_change(&self.id)?;
-        let parents = ws.resolve_multiple_changes(self.parent_ids)?;
-
-        if ws.check_immutable(vec![target.id().clone()])? {
-            precondition!("Revision {} is immutable", self.id.change.prefix);
-        }
-
-        // rebase the target's children
-        let rebased_children = ws.disinherit_children(&mut tx, &target).await?;
-
-        // update parents, which may have been descendants of the target
-        let parent_ids: Vec<_> = parents
-            .iter()
-            .map(|new_parent| {
-                rebased_children
-                    .get(new_parent.id())
-                    .unwrap_or(new_parent.id())
-                    .clone()
-            })
-            .collect();
-
-        // rebase the target itself
-        let rebased_id = target.id().hex();
-        rewrite::rebase_commit(tx.repo_mut(), target, parent_ids).await?;
-
-        match ws.finish_transaction(tx, format!("rebase commit {}", rebased_id))? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj rebase: {e}")),
         }
     }
 }
@@ -391,26 +300,30 @@ impl Mutation for MoveRevision {
 #[async_trait::async_trait(?Send)]
 impl Mutation for MoveSource {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["rebase"])
+            .args(["-r", &self.id.change.multiple_of_four_prefix()])
+            .args(
+                self.parent_ids
+                    .iter()
+                    .flat_map(|id| ["-o".into(), id.multiple_of_four_prefix()]),
+            )
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let target = ws.resolve_single_change(&self.id)?;
-        let parent_ids = ws
-            .resolve_multiple_commits(&self.parent_ids)?
-            .into_iter()
-            .map(|commit| commit.id().clone())
-            .collect();
-
-        if ws.check_immutable(vec![target.id().clone()])? {
-            precondition!("Revision {} is immutable", self.id.change.prefix);
-        }
-
-        // just rebase the target, which will also rebase its descendants
-        let rebased_id = target.id().hex();
-        rewrite::rebase_commit(tx.repo_mut(), target, parent_ids).await?;
-
-        match ws.finish_transaction(tx, format!("rebase commit {}", rebased_id))? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj rebase: {e}")),
         }
     }
 }
@@ -418,73 +331,27 @@ impl Mutation for MoveSource {
 #[async_trait::async_trait(?Send)]
 impl Mutation for MoveChanges {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["squash"])
+            .args(["--from", &self.from_id.change.multiple_of_four_prefix()])
+            .args(["--into", &self.to_id.multiple_of_four_prefix()])
+            .args(self.paths.iter().map(|path| path.repo_path.clone()))
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let from = ws.resolve_single_change(&self.from_id)?;
-        let mut to = ws.resolve_single_commit(&self.to_id)?;
-        let matcher = build_matcher(&self.paths)?;
-
-        if ws.check_immutable(vec![from.id().clone(), to.id().clone()])? {
-            precondition!("Revisions are immutable");
-        }
-
-        // construct a split tree and a remainder tree by copying changes from child to parent and from parent to child
-        let from_tree = from.tree();
-        let from_parents: Result<Vec<_>, _> = from.parents().collect();
-        let parent_tree = rewrite::merge_commit_trees(tx.repo(), &from_parents?).await?;
-        let split_tree = rewrite::restore_tree(&from_tree, &parent_tree, matcher.as_ref()).await?;
-        let remainder_tree =
-            rewrite::restore_tree(&parent_tree, &from_tree, matcher.as_ref()).await?;
-
-        // abandon or rewrite source
-        let abandon_source = remainder_tree.tree_ids() == parent_tree.tree_ids();
-        if abandon_source {
-            tx.repo_mut().record_abandoned_commit(&from);
-        } else {
-            tx.repo_mut()
-                .rewrite_commit(&from)
-                .set_tree(remainder_tree)
-                .write()?;
-        }
-
-        // rebase descendants of source, which may include destination
-        if tx.repo().index().is_ancestor(from.id(), to.id())? {
-            let mut rebase_map = std::collections::HashMap::new();
-            tx.repo_mut().rebase_descendants_with_options(
-                &RebaseOptions::default(),
-                |old_commit, rebased_commit| {
-                    rebase_map.insert(
-                        old_commit.id().clone(),
-                        match rebased_commit {
-                            RebasedCommit::Rewritten(new_commit) => new_commit.id().clone(),
-                            RebasedCommit::Abandoned { parent_id } => parent_id,
-                        },
-                    );
-                },
-            )?;
-            let rebased_to_id = rebase_map
-                .get(to.id())
-                .ok_or_else(|| anyhow!("descendant to_commit not found in rebase map"))?
-                .clone();
-            to = tx.repo().store().get_commit(&rebased_to_id)?;
-        }
-
-        // apply changes to destination
-        let to_tree = to.tree();
-        let new_to_tree = to_tree.merge(parent_tree, split_tree).await?;
-        let description = combine_messages(&from, &to, abandon_source);
-        tx.repo_mut()
-            .rewrite_commit(&to)
-            .set_tree(new_to_tree)
-            .set_description(description)
-            .write()?;
-
-        match ws.finish_transaction(
-            tx,
-            format!("move changes from {} to {}", from.id().hex(), to.id().hex()),
-        )? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj squash: {e}")),
         }
     }
 }
@@ -492,33 +359,27 @@ impl Mutation for MoveChanges {
 #[async_trait::async_trait(?Send)]
 impl Mutation for CopyChanges {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
+        let result = run_jj(["restore"])
+            .args(["--from", &self.from_id.multiple_of_four_prefix()])
+            .args(["--into", &self.to_id.change.multiple_of_four_prefix()])
+            .args(self.paths.iter().map(|path| path.repo_path.clone()))
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let from_tree = ws.resolve_single_commit(&self.from_id)?.tree();
-        let to = ws.resolve_single_change(&self.to_id)?;
-        let matcher = build_matcher(&self.paths)?;
-
-        if ws.check_immutable(vec![to.id().clone()])? {
-            precondition!("Revisions are immutable");
-        }
-
-        // construct a restore tree - the destination with some portions overwritten by the source
-        let to_tree = to.tree();
-        let new_to_tree = rewrite::restore_tree(&from_tree, &to_tree, matcher.as_ref()).await?;
-        if new_to_tree.tree_ids() == to_tree.tree_ids() {
-            Ok(MutationResult::Unchanged)
-        } else {
-            tx.repo_mut()
-                .rewrite_commit(&to)
-                .set_tree(new_to_tree)
-                .write()?;
-
-            tx.repo_mut().rebase_descendants()?;
-
-            match ws.finish_transaction(tx, format!("restore into commit {}", to.id().hex()))? {
-                Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
             }
+            Err(e) => Err(anyhow!("Failed to execute jj restore: {e}")),
         }
     }
 }
@@ -538,37 +399,25 @@ impl Mutation for TrackBranch {
                 remote_name,
                 ..
             } => {
-                let mut tx = ws.start_transaction().await?;
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let remote_name_ref = RemoteNameBuf::from(remote_name);
-                let remote_ref_symbol = RemoteRefSymbol {
-                    name: &branch_name_ref,
-                    remote: &remote_name_ref,
-                };
+                let result = run_jj(["bookmark", "track"])
+                    .arg(format!("{}@{}", branch_name, remote_name))
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                let remote_ref: &jj_lib::op_store::RemoteRef =
-                    ws.view().get_remote_bookmark(remote_ref_symbol);
-
-                if remote_ref.is_tracked() {
-                    precondition!(
-                        "{:?}@{:?} is already tracked",
-                        branch_name_ref.as_str(),
-                        remote_name_ref.as_str()
-                    );
-                }
-
-                tx.repo_mut().track_remote_bookmark(remote_ref_symbol)?;
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "track remote bookmark {:?}@{:?}",
-                        branch_name_ref.as_str(),
-                        remote_name_ref.as_str()
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark track: {e}")),
                 }
             }
         }
@@ -578,68 +427,75 @@ impl Mutation for TrackBranch {
 #[async_trait::async_trait(?Send)]
 impl Mutation for UntrackBranch {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
-
-        let mut untracked = Vec::new();
         match self.r#ref {
             StoreRef::Tag { tag_name } => {
                 precondition!("{} is a tag and cannot be untracked", tag_name);
             }
             StoreRef::LocalBookmark { branch_name, .. } => {
-                // untrack all remotes
                 for (remote_ref_symbol, remote_ref) in ws.view().remote_bookmarks_matching(
                     &StringPattern::exact(branch_name).to_matcher(),
                     &StringPattern::all().to_matcher(),
                 ) {
-                    if remote_ref_symbol.remote != REMOTE_NAME_FOR_LOCAL_GIT_REPO
-                        && remote_ref.is_tracked()
+                    if remote_ref_symbol.remote == REMOTE_NAME_FOR_LOCAL_GIT_REPO
+                        || !remote_ref.is_tracked()
                     {
-                        tx.repo_mut().untrack_remote_bookmark(remote_ref_symbol);
-                        untracked.push(format!(
+                        continue;
+                    }
+
+                    let result = run_jj(["bookmark", "untrack"])
+                        .arg(format!(
                             "{}@{}",
                             remote_ref_symbol.name.as_str(),
                             remote_ref_symbol.remote.as_str()
-                        ));
+                        ))
+                        .current_dir(ws.workspace.workspace_root())
+                        .output();
+
+                    match result {
+                        Ok(output) => {
+                            if !output.status.success() {
+                                return Ok(MutationResult::PreconditionError {
+                                    message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            return Err(anyhow!("Failed to execute jj bookmark untrack: {e}"));
+                        }
                     }
                 }
+
+                ws.load_at_head()?;
+                Ok(MutationResult::Updated {
+                    new_status: ws.format_status(),
+                })
             }
             StoreRef::RemoteBookmark {
                 branch_name,
                 remote_name,
                 ..
             } => {
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let remote_name_ref = RemoteNameBuf::from(remote_name);
-                let remote_ref_symbol = RemoteRefSymbol {
-                    name: &branch_name_ref,
-                    remote: &remote_name_ref,
-                };
-                let remote_ref: &jj_lib::op_store::RemoteRef =
-                    ws.view().get_remote_bookmark(remote_ref_symbol);
+                let result = run_jj(["bookmark", "untrack"])
+                    .arg(format!("{}@{}", branch_name, remote_name))
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                if !remote_ref.is_tracked() {
-                    precondition!(
-                        "{:?}@{:?} is not tracked",
-                        branch_name_ref.as_str(),
-                        remote_name_ref.as_str()
-                    );
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark untrack: {e}")),
                 }
-
-                tx.repo_mut().untrack_remote_bookmark(remote_ref_symbol);
-                untracked.push(format!(
-                    "{}@{}",
-                    branch_name_ref.as_str(),
-                    remote_name_ref.as_str()
-                ));
             }
-        }
-
-        match ws.finish_transaction(
-            tx,
-            format!("untrack remote {}", combine_bookmarks(&untracked)),
-        )? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
         }
     }
 }
@@ -647,36 +503,29 @@ impl Mutation for UntrackBranch {
 #[async_trait::async_trait(?Send)]
 impl Mutation for RenameBranch {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let old_name = self.r#ref.as_branch()?;
-        let old_name_ref = RefNameBuf::from(old_name);
+        let result = run_jj([
+            "bookmark",
+            "rename",
+            self.r#ref.as_branch()?,
+            &self.new_name,
+        ])
+        .current_dir(ws.workspace.workspace_root())
+        .output();
 
-        let ref_target = ws.view().get_local_bookmark(&old_name_ref).clone();
-        if ref_target.is_absent() {
-            precondition!("No such bookmark: {}", old_name_ref.as_str());
-        }
-
-        let new_name_ref = RefNameBuf::from(self.new_name);
-        if ws.view().get_local_bookmark(&new_name_ref).is_present() {
-            precondition!("Bookmark already exists: {}", new_name_ref.as_str());
-        }
-
-        let mut tx = ws.start_transaction().await?;
-
-        tx.repo_mut()
-            .set_local_bookmark_target(&new_name_ref, ref_target);
-        tx.repo_mut()
-            .set_local_bookmark_target(&old_name_ref, RefTarget::absent());
-
-        match ws.finish_transaction(
-            tx,
-            format!(
-                "rename {} to {}",
-                old_name_ref.as_str(),
-                new_name_ref.as_str()
-            ),
-        )? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
+            }
+            Err(e) => Err(anyhow!("Failed to execute jj bookmark rename: {e}")),
         }
     }
 }
@@ -684,9 +533,7 @@ impl Mutation for RenameBranch {
 #[async_trait::async_trait(?Send)]
 impl Mutation for CreateRef {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
-
-        let commit = ws.resolve_single_change(&self.id)?;
+        let revision_arg = self.id.change.multiple_of_four_prefix();
 
         match self.r#ref {
             StoreRef::RemoteBookmark {
@@ -701,49 +548,49 @@ impl Mutation for CreateRef {
                 );
             }
             StoreRef::LocalBookmark { branch_name, .. } => {
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let existing_branch = ws.view().get_local_bookmark(&branch_name_ref);
-                if existing_branch.is_present() {
-                    precondition!("{} already exists", branch_name_ref.as_str());
-                }
+                let result = run_jj(["bookmark", "create"])
+                    .args(["-r", &revision_arg])
+                    .arg(&branch_name)
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut().set_local_bookmark_target(
-                    &branch_name_ref,
-                    RefTarget::normal(commit.id().clone()),
-                );
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "create {} pointing to commit {}",
-                        branch_name_ref.as_str(),
-                        ws.format_commit_id(commit.id()).hex
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark create: {e}")),
                 }
             }
             StoreRef::Tag { tag_name, .. } => {
-                let tag_name_ref = RefNameBuf::from(tag_name);
-                let existing_tag = ws.view().get_local_tag(&tag_name_ref);
-                if existing_tag.is_present() {
-                    precondition!("{} already exists", tag_name_ref.as_str());
-                }
+                let result = run_jj(["tag", "set"])
+                    .args(["-r", &revision_arg])
+                    .arg(&tag_name)
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut()
-                    .set_local_tag_target(&tag_name_ref, RefTarget::normal(commit.id().clone()));
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "create {} pointing to commit {}",
-                        tag_name_ref.as_str(),
-                        ws.format_commit_id(commit.id()).hex
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj tag set: {e}")),
                 }
             }
         }
@@ -754,62 +601,67 @@ impl Mutation for CreateRef {
 impl Mutation for DeleteRef {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
         match self.r#ref {
-            StoreRef::RemoteBookmark {
-                branch_name,
-                remote_name,
-                ..
-            } => {
-                let mut tx = ws.start_transaction().await?;
+            StoreRef::RemoteBookmark { branch_name, .. } => {
+                let result = run_jj(["bookmark", "forget", &branch_name])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                // forget the bookmark entirely - when target is absent, it's removed from the view
-                let remote_ref = RemoteRef {
-                    target: RefTarget::absent(),
-                    state: RemoteRefState::New,
-                };
-                let remote_name_ref = RemoteNameBuf::from(remote_name);
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let remote_ref_symbol = RemoteRefSymbol {
-                    name: &branch_name_ref,
-                    remote: &remote_name_ref,
-                };
-
-                tx.repo_mut()
-                    .set_remote_bookmark(remote_ref_symbol, remote_ref);
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "forget {}@{}",
-                        branch_name_ref.as_str(),
-                        remote_name_ref.as_str()
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark forget: {e}")),
                 }
             }
             StoreRef::LocalBookmark { branch_name, .. } => {
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let mut tx = ws.start_transaction().await?;
+                let result = run_jj(["bookmark", "forget", &branch_name])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut()
-                    .set_local_bookmark_target(&branch_name_ref, RefTarget::absent());
-
-                match ws.finish_transaction(tx, format!("forget {}", branch_name_ref.as_str()))? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark forget: {e}")),
                 }
             }
             StoreRef::Tag { tag_name } => {
-                let tag_name_ref = RefNameBuf::from(tag_name);
-                let mut tx = ws.start_transaction().await?;
+                let result = run_jj(["tag", "delete", &tag_name])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut()
-                    .set_local_tag_target(&tag_name_ref, RefTarget::absent());
-
-                match ws.finish_transaction(tx, format!("forget tag {}", tag_name_ref.as_str()))? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj tag delete: {e}")),
                 }
             }
         }
@@ -820,9 +672,7 @@ impl Mutation for DeleteRef {
 #[async_trait::async_trait(?Send)]
 impl Mutation for MoveRef {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
-
-        let commit = ws.resolve_single_change(&self.to_id)?;
+        let change_id_prefix = self.to_id.change.multiple_of_four_prefix();
 
         match self.r#ref {
             StoreRef::RemoteBookmark {
@@ -833,49 +683,50 @@ impl Mutation for MoveRef {
                 precondition!("Bookmark is remote: {branch_name}@{remote_name}")
             }
             StoreRef::LocalBookmark { branch_name, .. } => {
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let old_target = ws.view().get_local_bookmark(&branch_name_ref);
-                if old_target.is_absent() {
-                    precondition!("No such bookmark: {:?}", branch_name_ref.as_str());
-                }
+                let result = run_jj(["bookmark"])
+                    .args(["move", &branch_name])
+                    .args(["--to", &change_id_prefix])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut().set_local_bookmark_target(
-                    &branch_name_ref,
-                    RefTarget::normal(commit.id().clone()),
-                );
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "point {:?} to commit {}",
-                        &branch_name_ref,
-                        commit.id().hex()
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj bookmark move: {e}")),
                 }
             }
             StoreRef::Tag { tag_name } => {
-                let tag_name_ref = RefNameBuf::from(tag_name);
-                let old_target = ws.view().get_local_tag(&tag_name_ref);
-                if old_target.is_absent() {
-                    precondition!("No such tag: {:?}", tag_name_ref.as_str());
-                }
+                let result = run_jj(["tag", "set"])
+                    .args(["-r", &change_id_prefix])
+                    .arg(&tag_name)
+                    .arg("--allow-move")
+                    .current_dir(ws.workspace.workspace_root())
+                    .output();
 
-                tx.repo_mut()
-                    .set_local_tag_target(&tag_name_ref, RefTarget::normal(commit.id().clone()));
-
-                match ws.finish_transaction(
-                    tx,
-                    format!(
-                        "point {:?} to commit {}",
-                        tag_name_ref.as_str(),
-                        commit.id().hex()
-                    ),
-                )? {
-                    Some(new_status) => Ok(MutationResult::Updated { new_status }),
-                    None => Ok(MutationResult::Unchanged),
+                match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            ws.load_at_head()?;
+                            Ok(MutationResult::Updated {
+                                new_status: ws.format_status(),
+                            })
+                        } else {
+                            Ok(MutationResult::PreconditionError {
+                                message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                            })
+                        }
+                    }
+                    Err(e) => Err(anyhow!("Failed to execute jj tag set: {e}")),
                 }
             }
         }
@@ -1192,207 +1043,41 @@ impl Mutation for CopyHunk {
 #[async_trait::async_trait(?Send)]
 impl Mutation for GitPush {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
-
-        // determine bookmarks to push, recording the old and new commits
-        let mut remote_branch_updates: Vec<(&str, Vec<(RefNameBuf, refs::BookmarkPushUpdate)>)> =
-            Vec::new();
-        let remote_branch_refs: Vec<_> = match &*self {
+        let result = match self.as_ref() {
             GitPush::AllBookmarks { remote_name } => {
-                let remote_name_ref = RemoteNameBuf::from(remote_name);
-                let mut branch_updates = Vec::new();
-                for (branch_name, targets) in ws.view().local_remote_bookmarks(&remote_name_ref) {
-                    if !targets.remote_ref.is_tracked() {
-                        continue;
-                    }
-
-                    match classify_branch_push(branch_name.as_str(), remote_name, targets) {
-                        Err(message) => return Ok(MutationResult::PreconditionError { message }),
-                        Ok(None) => (),
-                        Ok(Some(update)) => branch_updates.push((branch_name.to_owned(), update)),
-                    }
-                }
-                remote_branch_updates.push((remote_name, branch_updates));
-
-                ws.view()
-                    .remote_bookmarks(&remote_name_ref)
-                    .map(|(name, remote_ref)| (name.to_owned(), remote_ref))
-                    .collect()
+                run_jj(["git", "push", "--remote", remote_name])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output()
             }
             GitPush::AllRemotes { branch_ref } => {
-                let branch_name = branch_ref.as_branch()?;
-                let branch_name_ref = RefNameBuf::from(branch_name);
-
-                let mut remote_branch_refs = Vec::new();
-                for (remote_name, group) in ws
-                    .view()
-                    .all_remote_bookmarks()
-                    .filter_map(|(remote_ref_symbol, remote_ref)| {
-                        if remote_ref.is_tracked()
-                            && remote_ref_symbol.name == branch_name_ref
-                            && remote_ref_symbol.remote != REMOTE_NAME_FOR_LOCAL_GIT_REPO
-                        {
-                            Some((remote_ref_symbol.remote, remote_ref))
-                        } else {
-                            None
-                        }
-                    })
-                    .chunk_by(|(remote_name, _)| *remote_name)
-                    .into_iter()
-                {
-                    let mut branch_updates = Vec::new();
-                    for (_, remote_ref) in group {
-                        let targets = LocalAndRemoteRef {
-                            local_target: ws.view().get_local_bookmark(&branch_name_ref),
-                            remote_ref,
-                        };
-                        match classify_branch_push(branch_name, remote_name.as_str(), targets) {
-                            Err(message) => {
-                                return Ok(MutationResult::PreconditionError { message });
-                            }
-                            Ok(None) => (),
-                            Ok(Some(update)) => {
-                                branch_updates.push((RefNameBuf::from(branch_name), update))
-                            }
-                        }
-                        remote_branch_refs.push((RefNameBuf::from(branch_name), remote_ref));
-                    }
-                    remote_branch_updates.push((remote_name.as_str(), branch_updates));
-                }
-
-                remote_branch_refs
+                run_jj(["git", "push", "--bookmark", branch_ref.as_branch()?])
+                    .current_dir(ws.workspace.workspace_root())
+                    .output()
             }
             GitPush::RemoteBookmark {
                 remote_name,
                 branch_ref,
-            } => {
-                let branch_name = branch_ref.as_branch()?;
-                let branch_name_ref = RefNameBuf::from(branch_name);
-                let local_target = ws.view().get_local_bookmark(&branch_name_ref);
-                let remote_name_ref = RemoteNameBuf::from(remote_name);
-                let remote_ref_symbol = RemoteRefSymbol {
-                    name: &branch_name_ref,
-                    remote: &remote_name_ref,
-                };
-                let remote_ref = ws.view().get_remote_bookmark(remote_ref_symbol);
-
-                match classify_branch_push(
-                    branch_name,
-                    remote_name,
-                    LocalAndRemoteRef {
-                        local_target,
-                        remote_ref,
-                    },
-                ) {
-                    Err(message) => return Ok(MutationResult::PreconditionError { message }),
-                    Ok(None) => (),
-                    Ok(Some(update)) => {
-                        remote_branch_updates
-                            .push((remote_name, vec![(RefNameBuf::from(branch_name), update)]));
-                    }
-                }
-
-                vec![(
-                    RefNameBuf::from(branch_name),
-                    ws.view().get_remote_bookmark(remote_ref_symbol),
-                )]
-            }
+            } => run_jj(["git", "push"])
+                .args(["--bookmark", branch_ref.as_branch()?])
+                .args(["--remote", remote_name])
+                .current_dir(ws.workspace.workspace_root())
+                .output(),
         };
 
-        // check for conflicts
-        let mut new_heads = vec![];
-        for (_, branch_updates) in &mut remote_branch_updates {
-            for (_, update) in branch_updates {
-                if let Some(new_target) = &update.new_target {
-                    new_heads.push(new_target.clone());
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
                 }
             }
-        }
-
-        let mut old_heads = remote_branch_refs
-            .into_iter()
-            .flat_map(|(_, old_head)| old_head.target.added_ids())
-            .cloned()
-            .collect_vec();
-        if old_heads.is_empty() {
-            old_heads.push(ws.repo().store().root_commit_id().clone());
-        }
-
-        for commit in revset::walk_revs(ws.repo(), &new_heads, &old_heads)?
-            .iter()
-            .commits(ws.repo().store())
-        {
-            let commit = commit?;
-            let mut reasons = vec![];
-            if commit.description().is_empty() {
-                reasons.push("it has no description");
-            }
-            if commit.author().name.is_empty()
-                || commit.author().name == UserSettings::USER_NAME_PLACEHOLDER
-                || commit.author().email.is_empty()
-                || commit.author().email == UserSettings::USER_EMAIL_PLACEHOLDER
-                || commit.committer().name.is_empty()
-                || commit.committer().name == UserSettings::USER_NAME_PLACEHOLDER
-                || commit.committer().email.is_empty()
-                || commit.committer().email == UserSettings::USER_EMAIL_PLACEHOLDER
-            {
-                reasons.push("it has no author and/or committer set");
-            }
-            if commit.has_conflict() {
-                reasons.push("it has conflicts");
-            }
-            if !reasons.is_empty() {
-                precondition!(
-                    "Won't push revision {} since {}",
-                    ws.format_change_id(commit.change_id()).prefix,
-                    reasons.join(" and ")
-                );
-            }
-        }
-
-        // push to each remote
-        for (remote_name, branch_updates) in remote_branch_updates.into_iter() {
-            let targets = GitBranchPushTargets { branch_updates };
-            let git_settings = git::GitSettings::from_settings(&ws.data.workspace_settings)?;
-
-            ws.session.callbacks.with_git(tx.repo_mut(), &|repo, cb| {
-                git::push_branches(
-                    repo,
-                    &git_settings,
-                    RemoteName::new(remote_name),
-                    &targets,
-                    cb,
-                )?;
-                Ok(())
-            })?;
-        }
-
-        match ws.finish_transaction(
-            tx,
-            match *self {
-                GitPush::AllBookmarks { remote_name } => {
-                    format!("push all tracked branches to git remote {}", remote_name)
-                }
-                GitPush::AllRemotes { branch_ref } => {
-                    format!(
-                        "push {} to all tracked git remotes",
-                        branch_ref.as_branch()?
-                    )
-                }
-                GitPush::RemoteBookmark {
-                    remote_name,
-                    branch_ref,
-                } => {
-                    format!(
-                        "push {} to git remote {}",
-                        branch_ref.as_branch()?,
-                        remote_name
-                    )
-                }
-            },
-        )? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj git push: {e}")),
         }
     }
 }
@@ -1400,54 +1085,39 @@ impl Mutation for GitPush {
 #[async_trait::async_trait(?Send)]
 impl Mutation for GitFetch {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let mut tx = ws.start_transaction().await?;
-
-        let git_repo = match ws.git_repo() {
-            Some(git_repo) => git_repo,
-            None => precondition!("No git backend"),
-        };
-
-        let mut remote_patterns = Vec::new();
-        match *self {
-            GitFetch::AllBookmarks { remote_name } => {
-                remote_patterns.push((remote_name, None));
-            }
-            GitFetch::AllRemotes { branch_ref } => {
-                let branch_name = branch_ref.as_branch()?;
-                for remote_name in get_git_remote_names(&git_repo) {
-                    remote_patterns.push((remote_name, Some(branch_name.to_owned())));
-                }
-            }
+        let result = match self.as_ref() {
+            GitFetch::AllBookmarks { remote_name } => run_jj(["git", "fetch"])
+                .args(["--remote", remote_name])
+                .current_dir(ws.workspace.workspace_root())
+                .output(),
+            GitFetch::AllRemotes { branch_ref } => run_jj(["git", "fetch"])
+                .args(["--branch", branch_ref.as_branch()?])
+                .current_dir(ws.workspace.workspace_root())
+                .output(),
             GitFetch::RemoteBookmark {
                 remote_name,
                 branch_ref,
-            } => {
-                let branch_name = branch_ref.as_branch()?;
-                remote_patterns.push((remote_name, Some(branch_name.to_owned())));
+            } => run_jj(["git", "fetch"])
+                .args(["--branch", branch_ref.as_branch()?])
+                .args(["--remote", remote_name])
+                .current_dir(ws.workspace.workspace_root())
+                .output(),
+        };
+
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    Ok(MutationResult::Updated {
+                        new_status: ws.format_status(),
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).trim().into(),
+                    })
+                }
             }
-        }
-        let git_settings = git::GitSettings::from_settings(&ws.data.workspace_settings)?;
-
-        for (remote_name, pattern) in remote_patterns {
-            ws.session.callbacks.with_git(tx.repo_mut(), &|repo, cb| {
-                let mut fetcher = git::GitFetch::new(repo, &git_settings)?;
-                let bookmark_expr = pattern
-                    .clone()
-                    .map(StringExpression::exact)
-                    .unwrap_or_else(StringExpression::all);
-                let refspecs =
-                    git::expand_fetch_refspecs(RemoteName::new(&remote_name), bookmark_expr)?;
-                fetcher
-                    .fetch(RemoteName::new(&remote_name), refspecs, cb, None, None)
-                    .context("failed to fetch")?;
-                fetcher.import_refs().context("failed to import refs")?;
-                Ok(())
-            })?;
-        }
-
-        match ws.finish_transaction(tx, "fetch from git remote(s)".to_string())? {
-            Some(new_status) => Ok(MutationResult::Updated { new_status }),
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj git fetch: {e}")),
         }
     }
 }
@@ -1456,35 +1126,28 @@ impl Mutation for GitFetch {
 #[async_trait::async_trait(?Send)]
 impl Mutation for UndoOperation {
     async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
-        let head_op = op_walk::resolve_op_with_repo(ws.repo(), "@")?; // XXX this should be behind an abstraction, maybe reused in snapshot
-        let mut parent_ops = head_op.parents();
+        let result = run_jj(["undo"])
+            .current_dir(ws.workspace.workspace_root())
+            .output();
 
-        let Some(parent_op) = parent_ops.next().transpose()? else {
-            precondition!("Cannot undo repo initialization");
-        };
+        match result {
+            Ok(output) => {
+                if output.status.success() {
+                    ws.load_at_head()?;
+                    let working_copy = ws.get_commit(ws.wc_id())?;
+                    let new_selection = ws.format_header(&working_copy, None)?;
 
-        if parent_ops.next().is_some() {
-            precondition!("Cannot undo a merge operation");
-        };
-
-        let mut tx = ws.start_transaction().await?;
-        let repo_loader = tx.base_repo().loader();
-        let head_repo = repo_loader.load_at(&head_op)?;
-        let parent_repo = repo_loader.load_at(&parent_op)?;
-        tx.repo_mut().merge(&head_repo, &parent_repo)?;
-        let restored_view = tx.repo().view().store_view().clone();
-        tx.repo_mut().set_view(restored_view);
-
-        match ws.finish_transaction(tx, format!("undo operation {}", head_op.id().hex()))? {
-            Some(new_status) => {
-                let working_copy = ws.get_commit(ws.wc_id())?;
-                let new_selection = ws.format_header(&working_copy, None)?;
-                Ok(MutationResult::UpdatedSelection {
-                    new_status,
-                    new_selection,
-                })
+                    Ok(MutationResult::UpdatedSelection {
+                        new_status: ws.format_status(),
+                        new_selection,
+                    })
+                } else {
+                    Ok(MutationResult::PreconditionError {
+                        message: String::from_utf8_lossy(&output.stderr).into(),
+                    })
+                }
             }
-            None => Ok(MutationResult::Unchanged),
+            Err(e) => Err(anyhow!("Failed to execute jj undo: {e}")),
         }
     }
 }
@@ -1500,48 +1163,6 @@ fn combine_messages(source: &Commit, destination: &Commit, abandon_source: bool)
         }
     } else {
         destination.description().to_owned()
-    }
-}
-
-fn combine_bookmarks(branch_names: &[impl Display]) -> String {
-    match branch_names {
-        [branch_name] => format!("bookmark {}", branch_name),
-        branch_names => format!("bookmarks {}", branch_names.iter().join(", ")),
-    }
-}
-
-fn build_matcher(paths: &[TreePath]) -> Result<Box<dyn Matcher>> {
-    if paths.is_empty() {
-        Ok(Box::new(EverythingMatcher))
-    } else {
-        let repo_paths: Vec<_> = paths
-            .iter()
-            .map(|p| RepoPath::from_internal_string(&p.repo_path))
-            .try_collect()?;
-        Ok(Box::new(FilesMatcher::new(&repo_paths)))
-    }
-}
-
-fn classify_branch_push(
-    branch_name: &str,
-    remote_name: &str,
-    targets: LocalAndRemoteRef,
-) -> Result<Option<BookmarkPushUpdate>, String> {
-    let push_action = refs::classify_bookmark_push_action(targets);
-    match push_action {
-        BookmarkPushAction::AlreadyMatches => Ok(None),
-        BookmarkPushAction::Update(update) => Ok(Some(update)),
-        BookmarkPushAction::LocalConflicted => {
-            Err(format!("Bookmark {} is conflicted.", branch_name))
-        }
-        BookmarkPushAction::RemoteConflicted => Err(format!(
-            "Bookmark {}@{} is conflicted. Try fetching first.",
-            branch_name, remote_name
-        )),
-        BookmarkPushAction::RemoteUntracked => Err(format!(
-            "Non-tracking remote bookmark {}@{} exists. Try tracking it first.",
-            branch_name, remote_name
-        )),
     }
 }
 
