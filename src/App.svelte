@@ -93,7 +93,11 @@
     async function loadChange(id: RevId) {
         let rev = await query<RevResult>("query_revision", { id }, (q) => (selection = q));
 
-        if (rev.type == "data" && rev.value.type == "NotFound" && id.commit.hex != $repoStatusEvent?.working_copy.hex) {
+        if (
+            rev.type == "data" &&
+            rev.value.type == "NotFound" &&
+            id.commit.hex != $repoStatusEvent?.working_copy.hex
+        ) {
             return loadChange({
                 change: { type: "ChangeId", hex: "@", prefix: "@", rest: "" },
                 commit: $repoStatusEvent!.working_copy,
@@ -140,7 +144,9 @@
 </script>
 
 <Zone operand={{ type: "Repository" }} alwaysTarget let:target>
-    <div id="shell" class={$repoConfigEvent?.type == "Workspace" ? $repoConfigEvent.theme_override : ""}>
+    <div
+        id="shell"
+        class={$repoConfigEvent?.type == "Workspace" ? $repoConfigEvent.theme_override : ""}>
         {#if $repoConfigEvent.type == "Initial"}
             <Pane>
                 <h2 slot="header">Loading...</h2>
@@ -151,7 +157,9 @@
             <Pane />
         {:else if $repoConfigEvent.type == "Workspace"}
             {#key $repoConfigEvent.absolute_path}
-                <LogPane default_query={$repoConfigEvent.default_query} latest_query={$repoConfigEvent.latest_query} />
+                <LogPane
+                    default_query={$repoConfigEvent.default_query}
+                    latest_query={$repoConfigEvent.latest_query} />
             {/key}
 
             <div class="separator"></div>
@@ -163,7 +171,8 @@
                     <Pane>
                         <h2 slot="header">Not Found</h2>
                         <p slot="body">
-                            Revision <IdSpan id={data.id.change} />|<IdSpan id={data.id.commit} /> does not exist.
+                            Revision <IdSpan id={data.id.change} />|<IdSpan id={data.id.commit} /> does
+                            not exist.
                         </p>
                     </Pane>
                 {/if}
@@ -179,7 +188,8 @@
             <ModalOverlay>
                 <ErrorDialog title="No Workspace Loaded">
                     <p style="grid-column: 1/3">
-                        You can run <code>gg</code> in a Jujutsu workspace or open one from the Repository menu.
+                        You can run <code>gg</code> in a Jujutsu workspace or open one from the Repository
+                        menu.
                     </p>
                     <RecentWorkspaces workspaces={recentWorkspaces} />
                 </ErrorDialog>
@@ -217,7 +227,10 @@
         {:else if $currentMutation}
             <ModalOverlay>
                 {#if $currentMutation.type == "data" && ($currentMutation.value.type == "InternalError" || $currentMutation.value.type == "PreconditionError")}
-                    <ErrorDialog title="Command Error" onClose={() => ($currentMutation = null)} severe>
+                    <ErrorDialog
+                        title="Command Error"
+                        onClose={() => ($currentMutation = null)}
+                        severe>
                         {#if $currentMutation.value.type == "InternalError"}
                             <p>
                                 {#each $currentMutation.value.message.lines as line}

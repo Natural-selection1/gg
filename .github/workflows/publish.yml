@@ -1,4 +1,4 @@
-name: 'publish'
+name: "publish"
 
 on:
   push:
@@ -22,14 +22,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
-            workspaces: "src-tauri"
+          workspaces: "src-tauri"
 
       - name: install dependencies (ubuntu)
         if: matrix.platform == 'ubuntu-22.04'
@@ -45,13 +45,13 @@ jobs:
 
       - uses: KamaranL/add-signtool-action@v1
         if: matrix.platform == 'windows-latest'
-          
+
       - name: trusted-signing-cli (windows)
         if: matrix.platform == 'windows-latest'
         run: cargo install trusted-signing-cli@0.8.0
 
       - name: install frontend dependencies
-        run: npm ci 
+        run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -68,7 +68,7 @@ jobs:
         with:
           args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin --verbose' || '--verbose'}}
           tagName: v__VERSION__
-          releaseName: 'GG __VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseName: "GG __VERSION__"
+          releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: true

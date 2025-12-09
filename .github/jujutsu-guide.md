@@ -113,11 +113,13 @@ jj show -r "@-" --no-pager --git
 ### Error: "Syntax error" in revset
 
 **Problem**: PowerShell is interpreting special characters
+
 ```powershell
 jj show -r @-  # ❌ Causes syntax error
 ```
 
 **Solution**: Quote the revset
+
 ```powershell
 jj show -r "@-"  # ✅ Works correctly
 ```
@@ -125,11 +127,13 @@ jj show -r "@-"  # ✅ Works correctly
 ### Error: GUI diff viewer opens instead of terminal output
 
 **Problem**: Missing `--no-pager` flag
+
 ```powershell
 jj diff --from "@-" --to "@"  # ❌ Opens GUI
 ```
 
 **Solution**: Add `--no-pager` flag
+
 ```powershell
 jj diff --no-pager --git --from "@-" --to "@"  # ✅ Terminal output
 ```

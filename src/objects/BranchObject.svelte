@@ -16,10 +16,17 @@
 
     $: operand = { type: "Ref", header, ref } as Operand;
 
-    $: label = ref.type === "LocalBookmark" ? ref.branch_name : `${ref.branch_name}@${ref.remote_name}`;
+    $: label =
+        ref.type === "LocalBookmark" ? ref.branch_name : `${ref.branch_name}@${ref.remote_name}`;
 
     $: state = (
-        ref.type === "LocalBookmark" ? (ref.is_synced ? "change" : "add") : ref.is_tracked ? "remove" : "change"
+        ref.type === "LocalBookmark"
+            ? ref.is_synced
+                ? "change"
+                : "add"
+            : ref.is_tracked
+              ? "remove"
+              : "change"
     ) as "add" | "change" | "remove";
 
     $: disconnected =
@@ -30,7 +37,9 @@
 
     $: tip = computeTip(ref);
 
-    function computeTip(ref: Extract<StoreRef, { type: "LocalBookmark" | "RemoteBookmark" }>): string {
+    function computeTip(
+        ref: Extract<StoreRef, { type: "LocalBookmark" | "RemoteBookmark" }>
+    ): string {
         if (ref.type === "LocalBookmark") {
             if (ref.available_remotes == 0 && ref.potential_remotes > 0) {
                 return "local-only bookmark";

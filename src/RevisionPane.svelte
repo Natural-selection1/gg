@@ -34,8 +34,8 @@
     let unresolvedConflicts = rev.conflicts.filter(
         (conflict) =>
             rev.changes.findIndex(
-                (change) => !change.has_conflict && change.path.repo_path == conflict.path.repo_path,
-            ) == -1,
+                (change) => !change.has_conflict && change.path.repo_path == conflict.path.repo_path
+            ) == -1
     );
 
     let syntheticChanges = rev.changes
@@ -45,7 +45,7 @@
                 path: conflict.path,
                 has_conflict: true,
                 hunks: [conflict.hunk],
-            })),
+            }))
         )
         .sort((a, b) => a.path.relative_path.localeCompare(b.path.relative_path));
 
@@ -65,7 +65,11 @@
             return syntheticChanges.length;
         },
         getSelection() {
-            return syntheticChanges.findIndex((row) => row.path.repo_path == $changeSelectEvent?.path.repo_path) ?? -1;
+            return (
+                syntheticChanges.findIndex(
+                    (row) => row.path.repo_path == $changeSelectEvent?.path.repo_path
+                ) ?? -1
+            );
         },
         selectRow(row: number) {
             $changeSelectEvent = syntheticChanges[row];
@@ -102,7 +106,9 @@
 <Pane>
     <h2 slot="header" class="header">
         <span class="title">
-            <IdSpan selectable id={rev.header.id.change} /> | <IdSpan selectable id={rev.header.id.commit} />
+            <IdSpan selectable id={rev.header.id.change} /> | <IdSpan
+                selectable
+                id={rev.header.id.commit} />
             {#if rev.header.is_working_copy}
                 | Working copy
             {/if}
@@ -157,7 +163,11 @@
                     {#each rev.parents as parent}
                         <div class="parent">
                             <span>Parent:</span>
-                            <RevisionObject header={parent} child={rev.header} selected={false} noBranches />
+                            <RevisionObject
+                                header={parent}
+                                child={rev.header}
+                                selected={false}
+                                noBranches />
                         </div>
                     {/each}
                 </div>
@@ -187,15 +197,16 @@
                         <ChangeObject
                             {change}
                             header={rev.header}
-                            selected={$changeSelectEvent?.path?.repo_path === change.path.repo_path} />
+                            selected={$changeSelectEvent?.path?.repo_path ===
+                                change.path.repo_path} />
                         {#if $changeSelectEvent?.path?.repo_path === change.path.repo_path}
                             <div class="change" style="--lines: {minLines(change)}">
                                 {#each change.hunks as hunk}
                                     <div class="hunk">
                                         <HunkObject header={rev.header} path={change.path} {hunk} />
                                     </div>
-                                    <pre class="diff">{#each hunk.lines.lines as line}<span class={lineColour(line)}
-                                                >{line}</span
+                                    <pre class="diff">{#each hunk.lines.lines as line}<span
+                                                class={lineColour(line)}>{line}</span
                                             >{/each}</pre>
                                 {/each}
                             </div>

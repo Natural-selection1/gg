@@ -76,7 +76,7 @@ export default class RevisionMutator {
     onNewParent = () => {
         mutate<CreateRevisionBetween>("create_revision_between", {
             before_id: this.#revision.id,
-            after_id: this.#revision.parent_ids[0]
+            after_id: this.#revision.parent_ids[0],
         });
     };
 
@@ -126,7 +126,7 @@ export default class RevisionMutator {
         mutate<MoveChanges>("move_changes", {
             from_id: this.#revision.id,
             to_id: this.#revision.parent_ids[0],
-            paths: []
+            paths: [],
         });
     };
 
@@ -134,7 +134,7 @@ export default class RevisionMutator {
         mutate<CopyChanges>("copy_changes", {
             from_id: this.#revision.parent_ids[0],
             to_id: this.#revision.id,
-            paths: []
+            paths: [],
         });
     };
 
@@ -148,9 +148,9 @@ export default class RevisionMutator {
                 is_synced: false,
                 potential_remotes: 0,
                 available_remotes: 0,
-                tracking_remotes: []
+                tracking_remotes: [],
             };
-            mutate<CreateRef>("create_ref", { ref, id: this.#revision.id })
+            mutate<CreateRef>("create_ref", { ref, id: this.#revision.id });
         }
-    }
+    };
 }

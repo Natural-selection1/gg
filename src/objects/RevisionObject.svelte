@@ -15,7 +15,9 @@
     export let selected: boolean; // same as the imported event, but parent may want to force a value
     export let noBranches: boolean = false;
 
-    $: operand = (child ? { type: "Parent", header, child } : { type: "Revision", header }) as Operand;
+    $: operand = (
+        child ? { type: "Parent", header, child } : { type: "Revision", header }
+    ) as Operand;
 
     function onSelect() {
         revisionSelectEvent.set(header);
@@ -43,10 +45,17 @@
                 id={header.id.change}
                 pronoun={context ||
                     ($currentTarget?.type == "Merge" &&
-                        $currentTarget.header.parent_ids.findIndex((id) => id.hex == header.id.commit.hex) != -1)} />
+                        $currentTarget.header.parent_ids.findIndex(
+                            (id) => id.hex == header.id.commit.hex
+                        ) != -1)} />
 
-            <span class="text desc truncate" class:indescribable={!context && header.description.lines[0] == ""}>
-                {dragHint ?? (header.description.lines[0] == "" ? "(no description set)" : header.description.lines[0])}
+            <span
+                class="text desc truncate"
+                class:indescribable={!context && header.description.lines[0] == ""}>
+                {dragHint ??
+                    (header.description.lines[0] == ""
+                        ? "(no description set)"
+                        : header.description.lines[0])}
             </span>
 
             <span class="email"><AuthorSpan author={header.author} /></span>
@@ -72,10 +81,14 @@
             <div class="layout" class:target>
                 <IdSpan id={header.id.change} pronoun={context || target || dropHint != null} />
 
-                <span class="text desc truncate" class:indescribable={!context && header.description.lines[0] == ""}>
+                <span
+                    class="text desc truncate"
+                    class:indescribable={!context && header.description.lines[0] == ""}>
                     {dragHint ??
                         dropHint ??
-                        (header.description.lines[0] == "" ? "(no description set)" : header.description.lines[0])}
+                        (header.description.lines[0] == ""
+                            ? "(no description set)"
+                            : header.description.lines[0])}
                 </span>
 
                 <span class="email"><AuthorSpan author={header.author} /></span>

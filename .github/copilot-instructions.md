@@ -8,10 +8,9 @@
 
 - **`src/ipc.ts`**: Frontend IPC abstraction. Four message types:
   - `trigger()` - fire-and-forget backend actions (native UI)
-  - `query()` - request data without side effects  
+  - `query()` - request data without side effects
   - `mutate()` - structured repository mutations (goes through worker)
   - Events - server→client and client→client broadcasts via Svelte stores
-  
 - **`src-tauri/src/worker/mod.rs`**: Worker thread state machine. Session progresses through states:
   - `WorkerSession` - Opening/reopening workspace
   - `WorkspaceSession` - Workspace open, executes mutations
@@ -42,9 +41,11 @@ npm run gen  # Runs: cd src-tauri && cargo test -F ts-rs
 This exports TypeScript types to `src/messages/`. **Frontend will break without this step.**
 
 ### Source Control
+
 This project uses **Jujutsu (jj)** for version control instead of Git. See [jujutsu-guide.md](jujutsu-guide.md) for detailed usage instructions.
 
 **Quick Reference:**
+
 - View history: `jj log --no-pager`
 - View diffs: `jj diff --no-pager --git --from "@-" --to "@"`
 - Show commit: `jj show --no-pager --git -r "@-"`
@@ -67,18 +68,18 @@ npm run tauri dev -- -- -- --debug  # Pass --debug to app (yes, 3x --)
    impl Mutation for YourMutation {
        async fn execute(self: Box<Self>, ws: &mut WorkspaceSession) -> Result<MutationResult> {
            let mut tx = ws.start_transaction().await?;
-           
+
            // Resolve commits early
            let from = ws.resolve_single_change(&self.from_id)?;
            let to = ws.resolve_single_commit(&self.to_id)?;
-           
+
            // Check immutability before doing work
            if ws.check_immutable(vec![from.id().clone(), to.id().clone()])? {
                precondition!("Revisions are immutable");
            }
-           
+
            // Perform mutation logic...
-           
+
            match ws.finish_transaction(tx, "description")? {
                Some(new_status) => Ok(MutationResult::Updated { new_status }),
                None => Ok(MutationResult::Unchanged),
@@ -90,6 +91,7 @@ npm run tauri dev -- -- -- --debug  # Pass --debug to app (yes, 3x --)
 4. Call from frontend via `mutate()` in `src/ipc.ts`
 
 **Mutation Style Guide:**
+
 - Start transaction early (first line after signature)
 - Use consistent variable names: `from`/`to` not `source`/`target` or `from_commit`/`to_commit`
 - Check immutability immediately after resolving commits
@@ -116,6 +118,7 @@ See `DESIGN.md` "Branch Objects" section for the full state machine.
 `src-tauri/src/config/gg.toml` contains defaults. Settings loaded via `jj config` (user + repo layers).
 
 Key settings:
+
 - `gg.queries.log-page-size` - controls paging (default 1000)
 - `gg.queries.large-repo-heuristic` - disables features when repo is "too large" (default 100k)
 - `gg.ui.track-recent-workspaces` - disable to prevent config file updates (default true)
@@ -133,6 +136,7 @@ Access via `GGSettings` trait methods in `src-tauri/src/config/mod.rs`.
 ### Error Handling in Workers
 
 Use macros from `handler.rs`:
+
 - `fatal!(result)` - panic with logging (unrecoverable)
 - `nonfatal!(result)` - log and return early
 
@@ -141,16 +145,19 @@ In mutations, use the `precondition!` macro (defined in `mutations.rs`) to retur
 ### Tree Merge Semantics
 
 jj-lib's `MergedTree::merge()` performs 3-way merges:
+
 ```rust
 base_tree.merge(&side1, &side2)  // Merge side1 and side2 with base_tree as the merge base
 ```
 
 Common patterns:
+
 - **Apply changes**: `target.merge(&base, &modified)` - applies diff from base→modified to target
 - **Remove changes**: `modified.merge(&base, &added)` - removes diff from base→added from modified
 - **Backout**: `working.merge(&to_revert, &parent_of_to_revert)` - reverses changes
 
 Example from `MoveChanges`:
+
 ```rust
 let remainder_tree = from_tree.merge(&parent_tree, &split_tree)?;  // Remove split from from_tree
 let new_to_tree = to_tree.merge(&parent_tree, &split_tree)?;      // Add split to to_tree
@@ -182,17 +189,20 @@ match tree.path_value(path)?.into_resolved() {
 ### Testing Mutations
 
 Test repository (`src-tauri/resources/test-repo.zip`) contains pre-defined commits. Check which are mutable:
+
 ```bash
 jj log -r 'mutable()'  # Shows commits that can be modified in tests
 ```
 
 **Key test commits** (from `src-tauri/src/worker/tests/mod.rs`):
+
 - `working_copy()` - mntpnnrk (empty, child of main)
 - `main_bookmark()` - mnkoropy (renamed c.txt)
 - `conflict_bookmark()` - nwrnuwyp (has conflict in b.txt)
 - `resolve_conflict()` - rrxroxys (resolved the conflict)
 
 Test structure:
+
 - Use `mkid("change_id", "commit_id")` to reference specific commits
 - Use `mutation.execute_unboxed(&mut ws).await?` to run mutations (async)
 - Use `assert_matches!(result, MutationResult::Updated { .. })` to verify success
@@ -219,14 +229,14 @@ The log pane uses virtualization - a fixed pool of DOM slots that get reused as 
 ```svelte
 <!-- CORRECT: Key by slot position for virtualization -->
 {#each visibleSlice.rows as row, i (i)}
-    <RevisionObject header={row.revision} />
+  <RevisionObject header={row.revision} />
 {/each}
 
 <!-- WRONG: Content-based keys fight virtualization -->
 {#each visibleSlice.rows as row, i}
-    {#key row?.revision.id.commit.hex ?? i}
-        <RevisionObject header={row.revision} />
-    {/key}
+  {#key row?.revision.id.commit.hex ?? i}
+    <RevisionObject header={row.revision} />
+  {/key}
 {/each}
 ```
 

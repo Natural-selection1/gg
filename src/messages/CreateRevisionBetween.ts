@@ -2,4 +2,7 @@
 import type { CommitId } from "./CommitId";
 import type { RevId } from "./RevId";
 
-export interface CreateRevisionBetween { after_id: CommitId, before_id: RevId, }
+export interface CreateRevisionBetween {
+    after_id: CommitId;
+    before_id: RevId;
+}
