@@ -63,6 +63,7 @@ npm run tauri dev -- -- -- --debug  # Pass --debug to app (yes, 3x --)
 
 1. Define struct in `src-tauri/src/messages/mutations.rs` with `#[cfg_attr(feature = "ts-rs", derive(TS))]`
 2. Implement `Mutation` trait in `src-tauri/src/worker/mutations.rs`:
+
    ```rust
    #[async_trait::async_trait(?Send)]
    impl Mutation for YourMutation {
@@ -87,6 +88,7 @@ npm run tauri dev -- -- -- --debug  # Pass --debug to app (yes, 3x --)
        }
    }
    ```
+
 3. Run `npm run gen` to export types
 4. Call from frontend via `mutate()` in `src/ipc.ts`
 

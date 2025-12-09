@@ -1,4 +1,4 @@
-#[cfg(all(test, not(feature = "ts-rs")))]
+#[cfg(test)]
 mod tests;
 
 use std::path::Path;

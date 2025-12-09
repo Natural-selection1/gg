@@ -4,9 +4,4 @@ import type { CommitId } from "./CommitId";
 import type { RevId } from "./RevId";
 import type { TreePath } from "./TreePath";
 
-export interface MoveHunk {
-    from_id: RevId;
-    to_id: CommitId;
-    path: TreePath;
-    hunk: ChangeHunk;
-}
+export type MoveHunk = { from_id: RevId; to_id: CommitId; path: TreePath; hunk: ChangeHunk };

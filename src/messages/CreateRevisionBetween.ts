@@ -2,7 +2,7 @@
 import type { CommitId } from "./CommitId";
 import type { RevId } from "./RevId";
 
-export interface CreateRevisionBetween {
-    after_id: CommitId;
-    before_id: RevId;
-}
+/**
+ * Creates a new revision between two changes and makes it the working copy
+ */
+export type CreateRevisionBetween = { after_id: CommitId; before_id: RevId };
