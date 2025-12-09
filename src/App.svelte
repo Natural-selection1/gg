@@ -29,6 +29,7 @@
     import type { InputRequest } from "./messages/InputRequest";
     import type { InputResponse } from "./messages/InputResponse";
     import type Settings from "./shell/Settings";
+    import TitleBar from "./shell/TitleBar.svelte";
 
     let selection: Query<RevResult> = {
         type: "wait",
@@ -147,6 +148,9 @@
     <div
         id="shell"
         class={$repoConfigEvent?.type == "Workspace" ? $repoConfigEvent.theme_override : ""}>
+        <div style="grid-area: titlebar">
+            <TitleBar {selection} />
+        </div>
         {#if $repoConfigEvent.type == "Initial"}
             <Pane>
                 <h2 slot="header">Loading...</h2>
@@ -212,7 +216,7 @@
             </ModalOverlay>
         {/if}
 
-        <div class="separator" style="grid-area: 2/1/3/4"></div>
+        <div class="separator" style="grid-area: 3/1/4/4"></div>
 
         <StatusBar {target} />
 
@@ -258,8 +262,9 @@
 
         display: grid;
         grid-template-columns: 1fr 3px 1fr;
-        grid-template-rows: 1fr 3px 30px;
+        grid-template-rows: 30px 1fr 3px 30px;
         grid-template-areas:
+            "titlebar titlebar titlebar"
             "content content content"
             ". . ."
             "footer footer footer";

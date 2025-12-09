@@ -19,7 +19,7 @@ use jj_lib::config::ConfigSource;
 use log::LevelFilter;
 use tauri::async_runtime;
 use tauri::menu::Menu;
-use tauri::{Emitter, Listener, State, Window, WindowEvent, Wry};
+use tauri::{Emitter, State, Window, WindowEvent, Wry};
 use tauri::{Manager, ipc::InvokeError};
 use tauri_plugin_window_state::StateFlags;
 #[cfg(windows)]
@@ -168,8 +168,9 @@ fn main() -> Result<()> {
             undo_operation,
             query_recent_workspaces,
             open_workspace_at_path,
+            menu_repo_open,
+            menu_repo_reopen,
         ])
-        .menu(menu::build_main)
         .setup(|app| {
             let window = app
                 .get_webview_window("main")
@@ -185,17 +186,6 @@ fn main() -> Result<()> {
 
             handle = window.as_ref().window();
             window.on_window_event(move |event| handle_window_event(&handle, event));
-
-            handle = window.as_ref().window();
-            window.listen("gg://revision/select", move |event| {
-                let payload: Result<Option<messages::RevHeader>, serde_json::Error> =
-                    serde_json::from_str(event.payload());
-                if let Some(menu) = handle.menu()
-                    && let Ok(selection) = payload
-                {
-                    handler::fatal!(menu::handle_selection(menu, selection));
-                }
-            });
 
             let (revision_menu, tree_menu, ref_menu) = menu::build_context(app.handle())?;
 
@@ -576,32 +566,25 @@ fn try_open_repository(window: &Window, cwd: Option<PathBuf>) -> Result<()> {
     match call_rx.recv()? {
         Ok(config) => {
             log::debug!("load workspace succeeded");
-            match &config {
-                messages::RepoConfig::Workspace {
-                    absolute_path,
-                    track_recent_workspaces,
-                    ..
-                } => {
-                    let repo_path = absolute_path.0.clone();
-                    window.set_title((String::from("GG - ") + repo_path.as_str()).as_str())?;
-
-                    // update config and jump lists - this can be slow
-                    if *track_recent_workspaces {
-                        let window = window.clone();
-                        thread::spawn(move || {
-                            handler::nonfatal!(add_recent_workspaces(window, &repo_path));
-                        });
-                    }
-                }
-                _ => {
-                    window.set_title("GG - Gui for JJ")?;
+            if let messages::RepoConfig::Workspace {
+                absolute_path,
+                track_recent_workspaces,
+                ..
+            } = &config
+            {
+                let repo_path = absolute_path.0.clone();
+                // update config and jump lists - this can be slow
+                if *track_recent_workspaces {
+                    let window = window.clone();
+                    thread::spawn(move || {
+                        handler::nonfatal!(add_recent_workspaces(window, &repo_path));
+                    });
                 }
             }
             window.emit("gg://repo/config", config)?;
         }
         Err(err) => {
             log::warn!("load workspace failed: {err}");
-            window.set_title("GG - Gui for JJ")?;
             window.emit(
                 "gg://repo/config",
                 messages::RepoConfig::LoadError {
@@ -721,4 +704,14 @@ fn open_workspace_at_path(window: Window, path: String) -> Result<(), InvokeErro
             Err(InvokeError::from_anyhow(err))
         }
     }
+}
+
+#[tauri::command]
+fn menu_repo_open(window: Window) {
+    menu::repo_open(&window);
+}
+
+#[tauri::command]
+fn menu_repo_reopen(window: Window) {
+    menu::repo_reopen(&window);
 }
