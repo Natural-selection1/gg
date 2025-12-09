@@ -5,8 +5,6 @@ mod config;
 mod handler;
 mod menu;
 mod messages;
-#[cfg(windows)]
-mod windows;
 mod worker;
 
 use std::collections::HashMap;
@@ -24,6 +22,8 @@ use tauri::menu::Menu;
 use tauri::{Emitter, Listener, State, Window, WindowEvent, Wry};
 use tauri::{Manager, ipc::InvokeError};
 use tauri_plugin_window_state::StateFlags;
+#[cfg(windows)]
+use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
 
 use messages::{
     AbandonRevisions, BackoutRevisions, CheckoutRevision, CopyChanges, CreateRef, CreateRevision,
@@ -92,11 +92,11 @@ impl AppState {
 }
 
 fn main() -> Result<()> {
-    // before parsing args, attach a console on windows - will fail if not started from a shell, but that's fine
+    // before parsing args, attach a console on windows
+    // will fail if not started from a shell, but that's fine
+    // safety: FFI
     #[cfg(windows)]
-    {
-        windows::reattach_console();
-    }
+    let _ = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
 
     let args = Args::parse();
 
@@ -671,11 +671,6 @@ fn add_recent_workspaces(window: Window, repo_path: &str) -> Result<()> {
     recent.retain(|x| x != repo_path);
     recent.insert(0, repo_path.to_owned());
     recent.truncate(10);
-
-    #[cfg(windows)]
-    {
-        windows::update_jump_list(&mut recent)?;
-    }
 
     session_tx.send(SessionEvent::WriteConfigArray {
         key: vec![
