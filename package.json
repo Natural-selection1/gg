@@ -9,8 +9,16 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "gen": "cd src-tauri && cargo test -F ts-rs",
-    "test": "cd src-tauri && cargo test"
+    "gen": "cd src-tauri && cargo test export_bindings && bun run fmt",
+    "test": "cd src-tauri && cargo test",
+    "fix": "bun run fmt && bun run clippy",
+    "fmt": "bun run fmt:frontend && bun run fmt:backend",
+    "fmt:frontend": "bun x prettier --write \"**/*.{js,ts,svelte,json,css,md,yml}\"",
+    "fmt:backend": "cd src-tauri && cargo fmt",
+    "clippy": "cd src-tauri && cargo clippy --fix --all-targets --allow-dirty",
+    "fmt:ci:frontend": "bun x prettier --check \"**/*.{js,ts,svelte,json,css,md,yml}\"",
+    "fmt:ci:backend": "cd src-tauri && cargo fmt --check",
+    "clippy:ci": "cd src-tauri && cargo clippy -- -D warnings"
   },
   "dependencies": {
     "@catppuccin/palette": "^1.0.3",
@@ -23,6 +31,7 @@
     "@sveltejs/vite-plugin-svelte": "^6.0.0",
     "@tauri-apps/cli": "^2.9.0",
     "@tsconfig/svelte": "^5.0.2",
+    "prettier-plugin-svelte": "3.4.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "tslib": "^2.6.0",
