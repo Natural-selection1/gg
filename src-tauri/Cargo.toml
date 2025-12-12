@@ -15,9 +15,9 @@ assert_matches = "1.5"
 
 [dependencies]
 tauri = { version = "2.0.0", features = ["config-toml"] }
-tauri-codegen = "2.0.0"
+# tauri-codegen = "2.0.0"
 tauri-macros = "2.0.0"
-tauri-plugin = "2.0.0"
+# tauri-plugin = "2.0.0"
 tauri-runtime = "2.0.0"
 tauri-runtime-wry = "2.0.0"
 tauri-utils = "2.0.0"
@@ -75,7 +75,14 @@ windows = { version = "0.60", features = [
 ] }
 
 [profile.dev]
-debug = 0
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = true
 
 [profile.release]
 lto = true
